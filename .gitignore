@@ -1,0 +1,40 @@
+# Gradle and Kotlin caches
+.gradle/
+.kotlin/
+**/build/
+
+# Local SDK and IDE configuration
+local.properties
+.idea/
+*.iml
+*.ipr
+*.iws
+.externalNativeBuild/
+.cxx/
+.navigation/
+captures/
+.DS_Store
+*~
+*.swp
+*.swo
+
+# Generated packages, signature sidecars, and logs
+*.apk
+*.ap_
+*.aab
+*.idsig
+*.apk.sig
+*.log
+*.hprof
+
+# Local signing material
+*.jks
+*.keystore
+*.p12
+*.pfx
+*.pem
+*.key
+keystore.properties
+signing.properties
+
+# Required JARs, native libraries, assets, and any future wrapper JAR stay tracked.

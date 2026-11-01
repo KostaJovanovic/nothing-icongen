@@ -1,0 +1,257 @@
+package space.linuxct.nothing.icongen
+
+import android.app.job.JobInfo
+import android.app.job.JobScheduler
+import android.app.job.JobWorkItem
+import android.content.ComponentName
+import android.content.Context
+import android.content.Intent
+import android.util.Log
+import java.util.concurrent.CancellationException
+
+/** UI state and durable, coalesced requests. Only the job's single worker runs the pipeline. */
+object BuildCoordinator {
+    enum class Phase { IDLE, QUEUED, SCANNING, GENERATING, COMPILING, INSTALLING, WAITING_PERMISSION, WAITING_CONFIRMATION, DONE, FAILED, STOPPED }
+
+    data class State(
+        val phase: Phase = Phase.IDLE,
+        val message: String = "",
+        val percent: Int = 0,
+        val detail: String? = null,
+        val error: String? = null,
+        val apkPath: String? = null,
+        val startedAt: Long = 0L,
+    ) {
+        val isRunning: Boolean
+            get() = phase == Phase.SCANNING || phase == Phase.GENERATING ||
+                phase == Phase.COMPILING || phase == Phase.INSTALLING
+    }
+
+    @Volatile var state: State = State()
+        private set
+    private val listeners = java.util.concurrent.CopyOnWriteArraySet<(State) -> Unit>()
+    private const val PREFS = "build_queue"
+    private const val REQUESTED = "requested"
+    private const val COMPLETED = "completed"
+    private const val MANUAL = "manual"
+    private const val CANCELLATION = "cancellation_generation"
+    private const val STOPPED_MESSAGE = "stopped_message"
+    private var active: Cancellation? = null
+    const val JOB_ID = 4401
+
+    /** Captured before dispatch, so queued threads cannot escape a subsequent Stop. */
+    class Cancellation internal constructor(
+        private val context: Context,
+        private val generation: Long,
+        private val stopped: () -> Boolean,
+    ) {
+        @Volatile private var cancelled = false
+        private var process: Process? = null
+
+        fun checkpoint() {
+            if (cancelled || stopped() || context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                    .getLong(CANCELLATION, 0) != generation) {
+                cancel()
+                throw CancellationException("Icon pack generation stopped")
+            }
+        }
+
+        @Synchronized fun cancel() {
+            cancelled = true
+            process?.destroyForcibly()
+        }
+
+        @Synchronized fun attach(process: Process) {
+            try {
+                checkpoint()
+                this.process = process
+            } catch (failure: CancellationException) {
+                process.destroyForcibly()
+                throw failure
+            }
+        }
+
+        @Synchronized fun detach(process: Process) {
+            if (this.process === process) this.process = null
+        }
+
+        /** Stop and irreversible submission have a single ordering point. */
+        @Synchronized fun <T> commit(block: () -> T): T {
+            checkpoint()
+            return block()
+        }
+
+        fun update(block: (State) -> State) {
+            synchronized(BuildCoordinator) {
+                checkpoint()
+                BuildCoordinator.update(block)
+            }
+        }
+    }
+
+    @Synchronized
+    fun cancellation(context: Context, stopped: () -> Boolean = { false }): Cancellation =
+        Cancellation(context.applicationContext,
+            context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).getLong(CANCELLATION, 0), stopped)
+
+    fun isStopped(context: Context): Boolean =
+        context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).contains(STOPPED_MESSAGE)
+
+    internal fun prepareManualInstall(context: Context, cancellation: Cancellation) {
+        cancellation.update {
+            context.getSharedPreferences(PREFS, Context.MODE_PRIVATE).edit().remove(STOPPED_MESSAGE).commit()
+            State(phase = Phase.INSTALLING, message = "Preparing installation")
+        }
+    }
+
+    fun addListener(listener: (State) -> Unit) {
+        listeners.add(listener)
+        listener(state)
+    }
+    fun removeListener(listener: (State) -> Unit) { listeners.remove(listener) }
+
+    @Synchronized fun update(block: (State) -> State) {
+        state = block(state)
+        listeners.forEach { it(state) }
+    }
+    fun reset() { update { State() } }
+
+    @Synchronized
+    fun start(context: Context, trigger: String) {
+        val automatic = trigger.startsWith("package:")
+        if (automatic && !autoUpdateEnabled(context)) return
+        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        val next = prefs.getLong(REQUESTED, 0) + 1
+        val editor = prefs.edit().putLong(REQUESTED, next).remove(STOPPED_MESSAGE)
+        if (!automatic) editor.putLong(MANUAL, next)
+        editor.commit()
+        Log.d("BuildCoordinator", "Requested generation=$next trigger=$trigger")
+        if (!state.isRunning && state.phase != Phase.WAITING_PERMISSION && state.phase != Phase.WAITING_CONFIRMATION) {
+            waitingForScheduler(context)
+        }
+        schedule(context)
+    }
+
+    fun stopAll(context: Context) {
+        // Do not acquire the installer lock while holding the coordinator lock: installer
+        // callbacks acknowledge requests in the opposite direction.
+        synchronized(this) {
+            val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            prefs.edit().putLong(CANCELLATION, prefs.getLong(CANCELLATION, 0) + 1)
+                .putLong(COMPLETED, prefs.getLong(REQUESTED, 0))
+                .putString(STOPPED_MESSAGE, "All generation stopped").commit()
+            active?.cancel()
+            update { State(phase = Phase.STOPPED, message = "All generation stopped") }
+            context.getSystemService(JobScheduler::class.java).cancel(JOB_ID)
+        }
+        val message = IconPackInstaller.stopPending(context)
+        synchronized(this) {
+            val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+            if (prefs.contains(STOPPED_MESSAGE)) {
+                prefs.edit().putString(STOPPED_MESSAGE, message).commit()
+                update { State(phase = Phase.STOPPED, message = message) }
+            }
+        }
+        IconPackBuildService.cancelNotifications(context)
+    }
+
+    fun setAutoUpdateEnabled(context: Context, enabled: Boolean) {
+        // Enabling is not an installation event. Consume changes made while disabled.
+        PackageChangeMonitor.observeCurrent(context)
+        context.getSharedPreferences(PackageChangeReceiver.PREFS, Context.MODE_PRIVATE).edit()
+            .putBoolean(PackageChangeReceiver.KEY_ENABLED, enabled).commit()
+        if (enabled) PackageChangeMonitor.ensureScheduled(context)
+        else context.getSystemService(JobScheduler::class.java).cancel(PackageChangeMonitor.JOB_ID)
+    }
+
+    @Synchronized fun completeRequest(context: Context, request: Long) {
+        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        if (request > prefs.getLong(COMPLETED, 0)) prefs.edit().putLong(COMPLETED, request).commit()
+        Log.d("BuildCoordinator", "Acknowledged generation=$request")
+    }
+
+    /** Enqueue, rather than schedule: replacing a running job would cancel its build. */
+    private fun schedule(context: Context) {
+        val job = JobInfo.Builder(JOB_ID, ComponentName(context, IconPackBuildJobService::class.java))
+            .setOverrideDeadline(0).build()
+        val result = context.getSystemService(JobScheduler::class.java).enqueue(job, JobWorkItem(Intent()))
+        if (result != JobScheduler.RESULT_SUCCESS) update {
+            it.copy(phase = Phase.FAILED, message = "Could not schedule icon pack update",
+                error = "Android rejected the build job; open the app to retry")
+        }
+    }
+
+    @Synchronized fun resumeQueued(context: Context) {
+        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        if (prefs.getLong(REQUESTED, 0) > prefs.getLong(COMPLETED, 0)) {
+            if (!state.isRunning && state.phase != Phase.WAITING_PERMISSION && state.phase != Phase.WAITING_CONFIRMATION) {
+                waitingForScheduler(context)
+            }
+            schedule(context)
+        }
+        else prefs.getString(STOPPED_MESSAGE, null)?.let { message ->
+            update { State(phase = Phase.STOPPED, message = message) }
+        }
+    }
+
+    @Synchronized
+    fun waitingForScheduler(context: Context) {
+        val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+        if (prefs.contains(STOPPED_MESSAGE) ||
+            prefs.getLong(REQUESTED, 0) <= prefs.getLong(COMPLETED, 0)) return
+        update { State(phase = Phase.QUEUED, message = "Queued — waiting for Android to permit generation") }
+    }
+
+    /** The installer acknowledges a snapshot only after its recoverable operation is persisted. */
+    fun runPending(context: Context, stopped: () -> Boolean) {
+        if (stopped()) return
+        IconPackInstaller.restoreState(context)
+        while (!stopped() && !IconPackInstaller.hasPendingOperation(context)) {
+            val target: Long
+            val cancellation: Cancellation
+            synchronized(this) {
+                val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
+                target = prefs.getLong(REQUESTED, 0)
+                if (target <= prefs.getLong(COMPLETED, 0)) return
+                if (prefs.getLong(MANUAL, 0) <= prefs.getLong(COMPLETED, 0) && !autoUpdateEnabled(context)) {
+                    prefs.edit().putLong(COMPLETED, target).commit()
+                    return
+                }
+                cancellation = BuildCoordinator.cancellation(context, stopped)
+                active = cancellation
+            }
+            try {
+                cancellation.checkpoint()
+                if (!IconPackInstaller.beginBuild(context, cancellation)) return
+                val fingerprint = PackageChangeMonitor.fingerprint(context)
+                cancellation.checkpoint()
+                Log.d("BuildCoordinator", "Building generation=$target fingerprint=$fingerprint")
+                val apk = IconPackBuildService.build(context, cancellation)
+                cancellation.checkpoint()
+                IconPackInstaller.install(context, apk, target, fingerprint, cancellation)
+            } catch (_: CancellationException) {
+                // Explicit Stop consumed the queue. Framework interruption leaves it durable
+                // for redelivery, but neither path may publish stale failure/success state.
+                return
+            } catch (failure: Exception) {
+                try {
+                    cancellation.update {
+                        completeRequest(context, target)
+                        it.copy(phase = Phase.FAILED, message = "Icon pack update failed", error = failure.stackTraceToString())
+                    }
+                    cancellation.commit {
+                        Log.e("BuildCoordinator", "Generation $target failed", failure)
+                        IconPackBuildService.postResult(context, "Icon pack update failed",
+                            failure.message ?: failure.javaClass.simpleName, transient = true)
+                    }
+                } catch (_: CancellationException) { return }
+            } finally {
+                synchronized(this) { if (active === cancellation) active = null }
+            }
+        }
+    }
+
+    private fun autoUpdateEnabled(context: Context): Boolean =
+        context.getSharedPreferences(PackageChangeReceiver.PREFS, Context.MODE_PRIVATE)
+            .getBoolean(PackageChangeReceiver.KEY_ENABLED, true)
+}
