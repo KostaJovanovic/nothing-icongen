@@ -8,7 +8,12 @@ object OnboardingState {
     private const val COMPLETE = "complete"
 
     internal enum class Step { WELCOME, FEATURES, INSTALL, BACKGROUND, NOTIFICATIONS, SETTINGS, READY }
-    internal data class Draft(val appUpdates: Boolean, val themeChanges: Boolean, val notifications: Boolean) {
+    internal data class Draft(
+        val appUpdates: Boolean,
+        val themeChanges: Boolean,
+        val notifications: Boolean,
+        val appReleaseUpdates: Boolean = false,
+    ) {
         val automaticRefresh: Boolean get() = appUpdates || themeChanges
     }
 
@@ -29,15 +34,20 @@ object OnboardingState {
                     .getBoolean(PackageChangeReceiver.KEY_ENABLED, true),
                 ThemeRefreshController.isEnabled(context),
                 NotificationPreferences.isEnabled(context),
+                AppUpdateChecker.isEnabled(context),
             ))
         }
+        if (!prefs.contains("app_release_updates")) {
+            prefs.edit().putBoolean("app_release_updates", AppUpdateChecker.isEnabled(context)).commit()
+        }
         return Draft(prefs.getBoolean("app_updates", true), prefs.getBoolean("theme_changes", true),
-            prefs.getBoolean("notifications", true))
+            prefs.getBoolean("notifications", true), prefs.getBoolean("app_release_updates", false))
     }
 
     internal fun saveDraft(context: Context, draft: Draft) {
         preferences(context).edit().putBoolean("app_updates", draft.appUpdates)
             .putBoolean("theme_changes", draft.themeChanges).putBoolean("notifications", draft.notifications)
+            .putBoolean("app_release_updates", draft.appReleaseUpdates)
             .commit()
     }
 
@@ -63,6 +73,7 @@ object OnboardingState {
     internal fun restart(context: Context) {
         // Retain completion while reviewing an existing setup; canceling must not disable it.
         preferences(context).edit().remove("app_updates").remove("theme_changes").remove("notifications")
+            .remove("app_release_updates")
             .remove("install_deferred").remove("background_deferred").remove("notifications_deferred").remove("settings_deferred")
             .remove("pc").putString("step", Step.WELCOME.name).commit()
     }

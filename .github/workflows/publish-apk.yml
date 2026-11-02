@@ -22,8 +22,26 @@ jobs:
         with:
           persist-credentials: false
 
+      - name: Compute version
+        id: version
+        run: |
+          VERSION_CODE_FILE="VERSION_CODE"
+          if [ ! -f "$VERSION_CODE_FILE" ]; then
+            echo "1" > "$VERSION_CODE_FILE"
+          fi
+          VERSION_CODE=$(cat "$VERSION_CODE_FILE")
+          VERSION_CODE=$((VERSION_CODE + 1))
+          echo "$VERSION_CODE" > "$VERSION_CODE_FILE"
+          EPOCH=$(date +%s)
+          VERSION_NAME="1.0.0.${VERSION_CODE}"
+          # Tag format: v1.0.0.N-VERSION_CODE.EPOCH (sorts correctly as a version string)
+          TAG_NAME="build-${VERSION_NAME}-${VERSION_CODE}.${EPOCH}"
+          echo "version_code=${VERSION_CODE}" >> "$GITHUB_OUTPUT"
+          echo "version_name=${VERSION_NAME}" >> "$GITHUB_OUTPUT"
+          echo "tag_name=${TAG_NAME}" >> "$GITHUB_OUTPUT"
+
       - name: Set up Java 21 for Android SDK tools
-        uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        uses: actions/setup-java@b843ebf9b913146b3825da76410c181273ba90b1 # v7.0.0
         with:
           distribution: temurin
           java-version: '21'
@@ -35,7 +53,7 @@ jobs:
           log-accepted-android-sdk-licenses: false
 
       - name: Set up Java 17
-        uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0
+        uses: actions/setup-java@b843ebf9b913146b3825da76410c181273ba90b1 # v7.0.0
         with:
           distribution: temurin
           java-version: '17'
@@ -44,7 +62,8 @@ jobs:
         uses: gradle/actions/setup-gradle@8da46b539cd8fe6ab27ca75128919a18d757604c # v6.4.1
 
       - name: Test and build release APK
-        # SDK 22 is intentional; this sideloaded app is not a Play Store submission.
+        env:
+          CI_VERSION_NAME: ${{ steps.version.outputs.version_name }}
         run: ./gradlew --no-daemon testDebugUnitTest :app:packageRelease
 
       - name: Sign and verify APK
@@ -86,15 +105,15 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           GH_REPO: ${{ github.repository }}
         run: |
-          tag="build-$GITHUB_SHA"
+          tag="${{ steps.version.outputs.tag_name }}"
           apk="$RUNNER_TEMP/IconGen.apk"
           if gh release view "$tag" > /dev/null 2>&1; then
             gh release upload "$tag" "$apk" --clobber
           else
             gh release create "$tag" "$apk" \
-              --target "$GITHUB_SHA" \
-              --title "IconGen ${GITHUB_SHA:0:7}" \
+              --target "${{ github.sha }}" \
+              --title "IconGen v${{ steps.version.outputs.version_name }}" \
               --prerelease \
               --latest=false \
-              --notes "Signed APK for commit [$GITHUB_SHA](https://github.com/$GH_REPO/commit/$GITHUB_SHA). See the [README](https://github.com/$GH_REPO/blob/$GITHUB_SHA/README.md) for installation and setup."
+              --notes "Signed APK built on ${{ steps.version.outputs.tag_name }}. Source: [${{ github.sha }}](https://github.com/$GH_REPO/commit/${{ github.sha }}). See the [README](https://github.com/$GH_REPO/blob/${{ github.sha }}/README.md) for installation and setup."
           fi

@@ -25,6 +25,7 @@ class MainActivity : AppCompatActivity() {
     private lateinit var setupSummary: TextView
     private var details = ""
     private var setupDialog: android.app.Dialog? = null
+    private var updateConsentDialog: android.app.Dialog? = null
     private var builtApk: File? = null
     private var activityResumed = false
     private var resumingInstall = false
@@ -92,22 +93,7 @@ class MainActivity : AppCompatActivity() {
         // A genuinely new Activity must not remain stuck waiting for a lost result.
         if (savedInstanceState == null) setupPrefs.edit().remove(KEY_AWAITING).apply()
 
-        ui.toggle(automationCard, "App updates", "Rebuild after apps are installed or updated", getSharedPreferences(PackageChangeReceiver.PREFS, MODE_PRIVATE).getBoolean(PackageChangeReceiver.KEY_ENABLED, true), first = true) { checked ->
-            getSharedPreferences(PackageChangeReceiver.PREFS, MODE_PRIVATE).edit().putBoolean(PackageChangeReceiver.KEY_ENABLED, checked).apply()
-            if (checked) requestOperation("auto_update") else {
-                if (setupPrefs.getString(KEY_ACTION, null) == "auto_update") setupPrefs.edit().remove(KEY_ACTION).apply()
-                BuildCoordinator.setAutoUpdateEnabled(this, false)
-            }
-            refreshPermissionStatus()
-        }
-        ui.toggle(automationCard, "Notifications", "Optional progress and results", NotificationPreferences.isEnabled(this)) { enabled ->
-            NotificationPreferences.setEnabled(this, enabled)
-            refreshPermissionStatus()
-        }
-        ui.toggle(automationCard, "Theme changes", "Refresh the pack when light or dark mode changes", ThemeRefreshController.isEnabled(this), last = true) { enabled ->
-            ThemeRefreshController.setEnabled(this, enabled)
-            refreshThemeAccess()
-        }
+        renderAutomation()
         btnGenerate.setOnClickListener {
             val phase = BuildCoordinator.state.phase
             requestOperation(if (phase == BuildCoordinator.Phase.WAITING_CONFIRMATION || phase == BuildCoordinator.Phase.WAITING_PERMISSION) ACTION_INSTALL else ACTION_GENERATE)
@@ -121,6 +107,61 @@ class MainActivity : AppCompatActivity() {
     }
 
     private lateinit var automationCard: LinearLayout
+
+    private fun renderAutomation() {
+        automationCard.removeAllViews()
+        ui.toggle(automationCard, "App updates", "Rebuild after apps are installed or updated", getSharedPreferences(PackageChangeReceiver.PREFS, MODE_PRIVATE).getBoolean(PackageChangeReceiver.KEY_ENABLED, true), first = true) { checked ->
+            getSharedPreferences(PackageChangeReceiver.PREFS, MODE_PRIVATE).edit().putBoolean(PackageChangeReceiver.KEY_ENABLED, checked).apply()
+            if (checked) requestOperation("auto_update") else {
+                if (setupPrefs.getString(KEY_ACTION, null) == "auto_update") setupPrefs.edit().remove(KEY_ACTION).apply()
+                BuildCoordinator.setAutoUpdateEnabled(this, false)
+            }
+            refreshPermissionStatus()
+        }
+        ui.toggle(automationCard, "Notifications", "Optional progress, results and update alerts", NotificationPreferences.isEnabled(this)) { enabled ->
+            NotificationPreferences.setEnabled(this, enabled)
+            refreshPermissionStatus()
+        }
+        ui.toggle(automationCard, "Theme changes", "Refresh the pack when light or dark mode changes", ThemeRefreshController.isEnabled(this)) { enabled ->
+            ThemeRefreshController.setEnabled(this, enabled)
+            refreshThemeAccess()
+        }
+        ui.toggle(automationCard, "IconGen updates", "Check GitHub once a day for new IconGen releases", AppUpdateChecker.isEnabled(this), last = true) { enabled ->
+            AppUpdateChecker.setEnabled(this, enabled)
+        }
+    }
+
+    private fun postUpdateConsent() {
+        window.decorView.post {
+            if (!activityResumed || isFinishing || isDestroyed ||
+                !OnboardingState.isComplete(this) || AppUpdateChecker.hasDecision(this) ||
+                !window.decorView.hasWindowFocus() || updateConsentDialog?.isShowing == true ||
+                setupDialog?.isShowing == true || setupPrefs.getBoolean(KEY_FLOW_ACTIVE, false) ||
+                setupPrefs.contains(KEY_AWAITING) || intent.getBooleanExtra(EXTRA_THEME_ACCESS, false)
+            ) return@post
+            updateConsentDialog = ui.dialog(this, "IconGen updates") { content, dialog ->
+                ui.add(content, ui.text("Allow IconGen to contact GitHub in the background once every 24 hours to check for new IconGen releases? Android may delay these checks. No checks run unless you enable this option.", 14f))
+                ui.add(content, ui.text("When optional notifications are enabled, a new release can show an alert linking to GitHub. Updates are never installed automatically: installing IconGen requires a PC and the ADB bypass. You can change this choice in Automation.", 13f, muted = true), 12)
+                ui.add(content, ui.button("Enable", primary = true) {
+                    AppUpdateChecker.setEnabled(this, true)
+                    dialog.dismiss()
+                }, 20)
+                ui.add(content, ui.button("Not now · keep off") {
+                    AppUpdateChecker.setEnabled(this, false)
+                    dialog.dismiss()
+                }, 8)
+            }.apply {
+                setOnDismissListener {
+                    // Back and outside taps are a saved decline, never an opt-in.
+                    if (!AppUpdateChecker.hasDecision(this@MainActivity)) {
+                        AppUpdateChecker.setEnabled(this@MainActivity, false)
+                    }
+                    updateConsentDialog = null
+                    if (!isFinishing && !isDestroyed) renderAutomation()
+                }
+            }
+        }
+    }
 
     private fun createHome() {
         val root = ui.screen(this)
@@ -476,6 +517,7 @@ class MainActivity : AppCompatActivity() {
         super.onResume()
         if (!::ui.isInitialized) return
         activityResumed = true
+        renderAutomation()
         IconPackInstaller.restoreState(this)
         // Re-attach: the build may have started while this Activity did not exist.
         BuildCoordinator.addListener(buildListener)
@@ -486,6 +528,12 @@ class MainActivity : AppCompatActivity() {
             intent.removeExtra(EXTRA_THEME_ACCESS)
             showSettingsAccessInstructions()
         }
+        postUpdateConsent()
+    }
+
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus && ::ui.isInitialized) postUpdateConsent()
     }
 
     override fun onPause() {

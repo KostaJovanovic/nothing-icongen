@@ -11,6 +11,7 @@ class BackgroundMonitorReceiver : BroadcastReceiver() {
             Intent.ACTION_BOOT_COMPLETED, Intent.ACTION_MY_PACKAGE_REPLACED -> {
                 PackageChangeMonitor.register(context)
                 BackgroundMonitorService.sync(context, refresh = true)
+                AppUpdateChecker.sync(context)
             }
         }
     }

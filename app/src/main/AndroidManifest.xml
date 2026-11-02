@@ -46,6 +46,11 @@
             android:permission="android.permission.BIND_JOB_SERVICE" />
 
         <service
+            android:name=".UpdateCheckJob"
+            android:exported="true"
+            android:permission="android.permission.BIND_JOB_SERVICE" />
+
+        <service
             android:name=".BackgroundMonitorService"
             android:exported="false"
             android:stopWithTask="false"

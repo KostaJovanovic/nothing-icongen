@@ -34,6 +34,7 @@ class App : Application() {
         Handler(Looper.getMainLooper()).post {
             IconPackInstaller.restoreState(this)
             IconPackSelectionJobService.schedule(this)
+            AppUpdateChecker.sync(this)
         }
     }
 

@@ -11,12 +11,23 @@ android {
         applicationId = "space.linuxct.nothing.icongen"
         minSdk = 22
         targetSdk = 22
-        versionCode = 2
-        versionName = "1.1"
-    }
 
-    defaultConfig {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
+
+        // VersionCode: monotonically increasing integer (CI increments via ENV)
+        // VersionName: semver with build number (e.g. "1.0.0.1" for 1st build of 1.0.0)
+        val versionCodeFile = file("VERSION_CODE")
+        versionCode = if (versionCodeFile.exists()) {
+            versionCodeFile.readText().trim().toIntOrNull() ?: 1
+        } else {
+            1
+        }
+        versionName = try {
+            val v = System.getenv("CI_VERSION_NAME") ?: "1.0.0"
+            v
+        } catch (_: Exception) {
+            "1.0.0"
+        }
     }
 
     buildTypes {
@@ -49,6 +60,7 @@ android {
 
     buildFeatures {
         viewBinding = true
+        buildConfig = true
     }
 
     packaging {
@@ -56,8 +68,6 @@ android {
             excludes += setOf("META-INF/versions/9/OSGI-INF/**", "META-INF/*.SF", "META-INF/*.DSA", "META-INF/*.RSA")
         }
         jniLibs {
-            // aapt2/aapt are shipped as .so payloads; they must be extracted to
-            // nativeLibraryDir so they are executable, and must not be stripped.
             useLegacyPackaging = true
             keepDebugSymbols += setOf("**/libaapt2.so", "**/libaapt.so")
         }
@@ -92,13 +102,15 @@ configurations.matching { it.name.endsWith("UnitTestRuntimeClasspath") }.configu
 }
 
 private fun runCommand(vararg args: String) {
-    println("Running: ${args.joinToString(" ")}")
     val proc = ProcessBuilder(*args)
-        .inheritIO()
+        .redirectInput(ProcessBuilder.Redirect.PIPE)
+        .redirectOutput(ProcessBuilder.Redirect.PIPE)
+        .redirectError(ProcessBuilder.Redirect.PIPE)
         .start()
-    val rc = proc.waitFor()
-    if (rc != 0) {
-        throw GradleException("Command failed with exit code $rc: ${args.joinToString(" ")}")
+    proc.waitFor()
+    if (proc.exitValue() != 0) {
+        val stderr = proc.errorStream.bufferedReader().readText().trim()
+        throw GradleException("Command failed: ${args.joinToString(" ")}\n$stderr")
     }
 }
 

@@ -113,6 +113,9 @@ class OnboardingActivity : AppCompatActivity() {
         ui.toggle(choices, "Theme changes", "Refresh selected icons when light or dark mode changes; no rebuild needed.", draft.themeChanges) {
             save { current -> current.copy(themeChanges = it) }
         }
+        ui.toggle(choices, "IconGen updates", "Check GitHub once a day for new IconGen releases. Notifications must be enabled to see update alerts.", draft.appReleaseUpdates) {
+            save { current -> current.copy(appReleaseUpdates = it) }
+        }
         ui.toggle(choices, "Notifications", "Optional build progress and results. Not required for app-update detection.", draft.notifications, last = true) {
             save { current -> current.copy(notifications = it) }
         }
@@ -156,7 +159,7 @@ class OnboardingActivity : AppCompatActivity() {
         // With targetSdk 22 Android, not a runtime permission launcher, owns any initial prompt.
         IconPackBuildService.ensureChannels(this)
         val available = NotificationAccessUi.available(this)
-        val card = section(root, "Progress and results", "You chose optional notifications. Allow them to see build progress, installation approval requests and results. Declining access does not turn your choice off.")
+        val card = section(root, "Progress and results", "You chose optional notifications. Allow them to see build progress, installation approval requests, results, and optional update alerts. Declining access does not turn your choice off.")
         status(card, if (available) "Notification access is ready" else "Notifications are blocked")
         if (available) {
             ui.add(root, ui.button("Continue", primary = true, action = ::next), 20)
@@ -191,7 +194,7 @@ class OnboardingActivity : AppCompatActivity() {
         val missing = missingAccess(draft)
         val card = section(root, if (missing.isEmpty()) "Ready for IconGen" else "Ready, with access deferred",
             "Finish setup to save your choices and open IconGen. This does not start a build.")
-        ui.add(card, ui.text("App updates: ${if (draft.appUpdates) "on" else "off"}\nTheme changes: ${if (draft.themeChanges) "on" else "off"}\nOptional notifications: ${if (draft.notifications) "on" else "off"}", 14f), 16)
+        ui.add(card, ui.text("App updates: ${if (draft.appUpdates) "on" else "off"}\nTheme changes: ${if (draft.themeChanges) "on" else "off"}\nOptional notifications: ${if (draft.notifications) "on" else "off"}\nIconGen updates: ${if (draft.appReleaseUpdates) "on" else "off"}", 14f), 16)
         if (missing.isNotEmpty()) ui.add(card, ui.text(missing.joinToString("\n") { "• ${it.second}" }, 13f), 16)
         val pending = IconPackInstaller.pendingApk(this) != null
         val installed = try {
@@ -246,7 +249,7 @@ class OnboardingActivity : AppCompatActivity() {
         }
         BuildCoordinator.setAutoUpdateEnabled(this, draft.appUpdates)
         NotificationPreferences.setEnabled(this, draft.notifications)
-        ThemeRefreshController.setEnabled(this, draft.themeChanges)
+        AppUpdateChecker.setEnabled(this, draft.appReleaseUpdates)
         // Old operation recovery stays available, but its former first-run permission tour is done.
         getSharedPreferences("permission_setup", MODE_PRIVATE).edit()
             .putBoolean("notification_asked", true).putBoolean("source_asked", true)
