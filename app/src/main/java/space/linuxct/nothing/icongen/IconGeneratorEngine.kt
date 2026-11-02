@@ -4,7 +4,7 @@ import android.content.Context
 import android.util.Log
 import java.io.File
 
-/** Generates mapped PNG resources using Nothing's installed monochrome implementation. */
+/** Generates mapped monochrome PNG resources. */
 object IconGeneratorEngine {
     private const val TAG = "IconGeneratorEngine"
 

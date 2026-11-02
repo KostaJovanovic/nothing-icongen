@@ -119,7 +119,7 @@ object BuildCoordinator {
     @Synchronized
     fun start(context: Context, trigger: String) {
         val automatic = trigger.startsWith("package:")
-        if (automatic && !autoUpdateEnabled(context)) return
+        if (automatic && (!OnboardingState.isComplete(context) || !autoUpdateEnabled(context))) return
         val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         val next = prefs.getLong(REQUESTED, 0) + 1
         val editor = prefs.edit().putLong(REQUESTED, next).remove(STOPPED_MESSAGE)
@@ -182,6 +182,7 @@ object BuildCoordinator {
     }
 
     @Synchronized fun resumeQueued(context: Context) {
+        if (!OnboardingState.isComplete(context)) return
         val prefs = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
         if (prefs.getLong(REQUESTED, 0) > prefs.getLong(COMPLETED, 0)) {
             if (!state.isRunning && state.phase != Phase.WAITING_PERMISSION && state.phase != Phase.WAITING_CONFIRMATION) {
@@ -206,6 +207,7 @@ object BuildCoordinator {
     fun runPending(context: Context, stopped: () -> Boolean) {
         if (stopped()) return
         IconPackInstaller.restoreState(context)
+        if (!OnboardingState.isComplete(context)) return
         while (!stopped() && !IconPackInstaller.hasPendingOperation(context)) {
             val target: Long
             val cancellation: Cancellation
@@ -242,7 +244,7 @@ object BuildCoordinator {
                     cancellation.commit {
                         Log.e("BuildCoordinator", "Generation $target failed", failure)
                         IconPackBuildService.postResult(context, "Icon pack update failed",
-                            failure.message ?: failure.javaClass.simpleName, transient = true)
+                            failure.message ?: failure.javaClass.simpleName, IconPackBuildService.ResultKind.ERROR)
                     }
                 } catch (_: CancellationException) { return }
             } finally {

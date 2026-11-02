@@ -23,6 +23,8 @@ object IconPackInstaller {
     private const val CONFIRMATION = "confirmation"
     private const val BUILD_REQUEST = "build_request"
     private const val SNAPSHOT = "build_fingerprint"
+    private const val REAPPLY_VERSION = "reapply_version"
+    private const val REAPPLY_REQUEST = "reapply_request"
     private const val PERMISSION = "permission"
     private const val INSTALLING = "installing"
     private const val CONFIRMING = "confirming"
@@ -36,6 +38,28 @@ object IconPackInstaller {
 
     private fun prefs(context: Context) = context.getSharedPreferences(PREFS, Context.MODE_PRIVATE)
 
+    internal fun pendingReapplyVersion(context: Context): Long? =
+        prefs(context).getLong(REAPPLY_VERSION, -1).takeIf { it >= 0 }
+
+    internal data class ReapplyRequest(val version: Long, val request: Long)
+
+    @Synchronized
+    internal fun pendingReapply(context: Context): ReapplyRequest? = pendingReapplyVersion(context)?.let {
+        ReapplyRequest(it, prefs(context).getLong(REAPPLY_REQUEST, 0))
+    }
+
+    internal fun canReapplyInstalledPack(context: Context): Boolean =
+        pendingReapplyVersion(context)?.let { installedVersion(context) == it } == true
+
+    /** Version AND operation identity prevent consuming a newer same-version reinstall. */
+    @Synchronized
+    internal fun completeReapply(context: Context, request: ReapplyRequest) {
+        val prefs = prefs(context)
+        if (pendingReapply(context) == request) {
+            check(prefs.edit().remove(REAPPLY_VERSION).commit()) { "Could not acknowledge icon pack reapply" }
+        }
+    }
+
     @Synchronized
     fun hasPendingOperation(context: Context): Boolean =
         prefs(context).getString(STAGE, null) in setOf(PERMISSION, INSTALLING, CONFIRMING)
@@ -45,7 +69,13 @@ object IconPackInstaller {
     fun beginBuild(context: Context, cancellation: BuildCoordinator.Cancellation = BuildCoordinator.cancellation(context)): Boolean {
         cancellation.checkpoint()
         if (hasPendingOperation(context)) return false
-        prefs(context).edit().clear().commit()
+        val prefs = prefs(context)
+        val reapplyVersion = prefs.getLong(REAPPLY_VERSION, -1)
+        val reapplyRequest = prefs.getLong(REAPPLY_REQUEST, 0)
+        prefs.edit().clear().apply {
+            if (reapplyVersion >= 0) putLong(REAPPLY_VERSION, reapplyVersion)
+            putLong(REAPPLY_REQUEST, reapplyRequest)
+        }.commit()
         return true
     }
 
@@ -62,7 +92,7 @@ object IconPackInstaller {
             "Generation stopped. Installation was already submitted to Android and may still finish."
         } else "All generation stopped"
         prefs.edit().putString(STAGE, STOPPED).putString(STATUS, message)
-            .putInt(SESSION, -1).remove(CONFIRMATION).commit()
+            .putInt(SESSION, -1).remove(CONFIRMATION).remove(REAPPLY_VERSION).commit()
         statusListener?.invoke(message)
         return message
     }
@@ -117,7 +147,8 @@ object IconPackInstaller {
         if (!InstallAccess.canInstall(context)) {
             publish(context, cancellation)
             cancellation.commit {
-                IconPackBuildService.postResult(context, "Install access needed", "Open the generator to allow icon pack installation")
+                IconPackBuildService.postResult(context, "Install access needed",
+                    "Open the generator to allow icon pack installation", IconPackBuildService.ResultKind.ACTION_REQUIRED)
             }
             return
         }
@@ -210,8 +241,14 @@ object IconPackInstaller {
             if (session == null) {
                 val expected = prefs.getLong(EXPECTED_VERSION, -1)
                 val previous = prefs.getLong(PREVIOUS_VERSION, -1)
-                if (expected > previous && installedVersion(context) == expected) {
+                val installed = installedVersion(context)
+                if (expected > previous && installed == expected) {
                     finish(context, true, "Icon pack installed")
+                } else if (expected >= 0 && expected == previous && installed == expected) {
+                    // Existence cannot prove a reinstall, but session disappearance must not
+                    // discard an authoritative success callback still queued by Android.
+                    prefs.edit().putString(STATUS, "Waiting for Android to confirm the same-version installation").commit()
+                    publish(context)
                 } else {
                     finish(context, false, "Install ended without success; generate or install again")
                 }
@@ -270,6 +307,7 @@ object IconPackInstaller {
             }
         }
         if (cancellation != null) cancellation.update(update) else BuildCoordinator.update(update)
+        IconPackBuildService.updateProgress(context, BuildCoordinator.state)
         statusListener?.invoke(message)
     }
 
@@ -278,12 +316,28 @@ object IconPackInstaller {
             stopPending(context)
             return@synchronized
         }
-        Log.d(TAG, "Install result success=$success session=${prefs(context).getInt(SESSION, -1)} expectedVersion=${prefs(context).getLong(EXPECTED_VERSION, -1)} message=$message")
-        prefs(context).edit().putString(STAGE, if (success) SUCCESS else FAILED)
-            .putString(STATUS, message).remove(CONFIRMATION).commit()
-        if (success) prefs(context).getString(SNAPSHOT, null)?.let { PackageChangeMonitor.installed(context, it) }
+        val prefs = prefs(context)
+        val expected = prefs.getLong(EXPECTED_VERSION, -1)
+        val verified = success && expected >= 0 && installedVersion(context) == expected
+        val resultMessage = if (success && !verified) {
+            "Install ended without the expected updated icon pack; generate or install again"
+        } else message
+        Log.d(TAG, "Install result success=$verified session=${prefs.getInt(SESSION, -1)} expectedVersion=$expected message=$resultMessage")
+        // The refresh request and success acknowledgement must survive process death together.
+        check(prefs.edit().putString(STAGE, if (verified) SUCCESS else FAILED)
+            .putString(STATUS, resultMessage).remove(CONFIRMATION).apply {
+                if (verified) {
+                    putLong(REAPPLY_VERSION, expected)
+                    putLong(REAPPLY_REQUEST, prefs.getLong(REAPPLY_REQUEST, 0) + 1)
+                }
+            }.commit()) { "Could not persist installation result" }
+        if (verified) {
+            IconPackSelectionJobService.scheduleConfirmedInstall(context)
+            prefs.getString(SNAPSHOT, null)?.let { PackageChangeMonitor.installed(context, it) }
+        }
         publish(context)
-        IconPackBuildService.postResult(context, if (success) "Icon pack updated" else "Icon pack install failed", message, transient = true)
+        IconPackBuildService.postResult(context, if (verified) "Icon pack updated" else "Icon pack install failed",
+            resultMessage, if (verified) IconPackBuildService.ResultKind.SUCCESS else IconPackBuildService.ResultKind.ERROR)
         BuildCoordinator.resumeQueued(context)
     }
 
@@ -316,7 +370,8 @@ object IconPackInstaller {
                             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
                         // A direct activity PendingIntent is user-initiated, not a background launch.
                         IconPackBuildService.postResult(context, "Confirm icon pack installation",
-                            "Tap to approve the Android installer, or open the generator", action)
+                            "Tap to approve the Android installer, or open the generator",
+                            IconPackBuildService.ResultKind.ACTION_REQUIRED, action)
                     }
                     PackageInstaller.STATUS_SUCCESS -> finish(context, true, "Icon pack installed")
                     else -> finish(context, false,

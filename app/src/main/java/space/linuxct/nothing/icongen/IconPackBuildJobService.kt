@@ -6,7 +6,7 @@ import android.util.Log
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
 
-/** Package broadcasts cannot start a data-sync FGS from the background on target 35. */
+/** Runs generation and persisted package reconciliation under Android's job scheduler. */
 class IconPackBuildJobService : JobService() {
     private class Run(val params: JobParameters) {
         @Volatile var stopped = false
@@ -45,7 +45,10 @@ class IconPackBuildJobService : JobService() {
     override fun onStopJob(params: JobParameters): Boolean {
         Log.d("IconPackBuildJobService", "Job stopped id=${params.jobId}; rescheduling unfinished work")
         runs[params.jobId]?.stopped = true
-        if (params.jobId == BuildCoordinator.JOB_ID) BuildCoordinator.waitingForScheduler(applicationContext)
+        if (params.jobId == BuildCoordinator.JOB_ID) {
+            IconPackBuildService.cancelProgress(applicationContext)
+            BuildCoordinator.waitingForScheduler(applicationContext)
+        }
         return true
     }
 

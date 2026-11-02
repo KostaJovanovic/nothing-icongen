@@ -77,8 +77,18 @@ dependencies {
     implementation("androidx.appcompat:appcompat:1.7.0")
     implementation("androidx.palette:palette-ktx:1.0.0")
     implementation("com.google.android.material:material:1.12.0")
+    implementation("androidx.dynamicanimation:dynamicanimation:1.0.0")
     implementation("androidx.recyclerview:recyclerview:1.3.2")
     implementation("androidx.activity:activity-ktx:1.9.3")
+    implementation("com.github.MuntashirAkon:libadb-android:3.1.1") {
+        exclude(group = "org.bouncycastle", module = "bcprov-jdk15to18")
+    }
+    implementation("org.conscrypt:conscrypt-android:2.8.0")
+}
+
+// Robolectric supplies desktop Conscrypt. Android's JNI provider cannot run on the host JVM.
+configurations.matching { it.name.endsWith("UnitTestRuntimeClasspath") }.configureEach {
+    exclude(group = "org.conscrypt", module = "conscrypt-android")
 }
 
 private fun runCommand(vararg args: String) {

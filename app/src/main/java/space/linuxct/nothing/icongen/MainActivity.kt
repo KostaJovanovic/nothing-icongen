@@ -1,12 +1,10 @@
 package space.linuxct.nothing.icongen
 
 import android.Manifest
-import android.app.NotificationManager
 import android.content.Intent
 import android.content.pm.PackageManager
 import android.os.Build
 import android.os.Bundle
-import android.provider.Settings
 import android.util.Log
 import android.view.View
 import android.widget.*
@@ -19,23 +17,14 @@ import java.util.concurrent.CancellationException
 class MainActivity : AppCompatActivity() {
 
     private lateinit var tvStatus: TextView
-    private lateinit var tvResult: TextView
-    private lateinit var step1Indicator: TextView
-    private lateinit var step1Status: TextView
-    private lateinit var step2Indicator: TextView
-    private lateinit var step2Status: TextView
-    private lateinit var step3Indicator: TextView
-    private lateinit var step3Status: TextView
-    private lateinit var step4Indicator: TextView
-    private lateinit var step4Status: TextView
+    private lateinit var ui: LucentUi
     private lateinit var btnGenerate: Button
     private lateinit var btnStopGeneration: Button
-    private lateinit var btnInstall: Button
-    private lateinit var btnSelectInLauncher: Button
-    private lateinit var tvPermissions: TextView
-    private lateinit var btnNotificationAccess: Button
-    private lateinit var btnInstallAccess: Button
-
+    private lateinit var progress: ProgressBar
+    private lateinit var workControls: LinearLayout
+    private lateinit var setupSummary: TextView
+    private var details = ""
+    private var setupDialog: android.app.Dialog? = null
     private var builtApk: File? = null
     private var activityResumed = false
     private var resumingInstall = false
@@ -44,6 +33,7 @@ class MainActivity : AppCompatActivity() {
     companion object {
         private const val TAG = "MainActivity"
         private const val KEY_NOTIFICATION_ASKED = "notification_asked"
+        const val EXTRA_THEME_ACCESS = "show_theme_access"
         private const val KEY_SOURCE_ASKED = "source_asked"
         private const val KEY_FLOW_ACTIVE = "flow_active"
         private const val KEY_AWAITING = "awaiting"
@@ -76,114 +66,148 @@ class MainActivity : AppCompatActivity() {
         ActivityResultContracts.StartActivityForResult(),
     ) { refreshPermissionStatus() }
 
+    private val backgroundAccessLauncher = registerForActivityResult(
+        ActivityResultContracts.StartActivityForResult(),
+    ) {
+        IconPackSelectionJobService.scheduleAfterAccessChange(this)
+        refreshPermissionStatus()
+    }
+
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
-        setContentView(R.layout.activity_main)
-        // With targetSdk < 33, Android owns the notification permission prompt.
-        // Creating channels during Activity startup lets the system present it.
-        IconPackBuildService.ensureChannels(this)
+        if (!OnboardingState.isComplete(this)) {
+            startActivity(Intent(this, OnboardingActivity::class.java)
+                .putExtra(EXTRA_THEME_ACCESS, intent.getBooleanExtra(EXTRA_THEME_ACCESS, false)))
+            finish()
+            return
+        }
+        ui = LucentUi(this)
+        createHome()
+        // With the legacy target Android owns the notification prompt. Only prepare
+        // optional channels here when the user actually chose those notifications.
+        if (NotificationPreferences.isEnabled(this)) IconPackBuildService.ensureChannels(this)
 
-        tvStatus = findViewById(R.id.tvStatus)
-        tvResult = findViewById(R.id.tvResult)
-        step1Indicator = findViewById(R.id.step1Indicator)
-        step1Status = findViewById(R.id.step1Status)
-        step2Indicator = findViewById(R.id.step2Indicator)
-        step2Status = findViewById(R.id.step2Status)
-        step3Indicator = findViewById(R.id.step3Indicator)
-        step3Status = findViewById(R.id.step3Status)
-        step4Indicator = findViewById(R.id.step4Indicator)
-        step4Status = findViewById(R.id.step4Status)
-        btnGenerate = findViewById(R.id.btnGenerate)
-        btnStopGeneration = findViewById(R.id.btnStopGeneration)
-        btnInstall = findViewById(R.id.btnInstall)
-        btnSelectInLauncher = findViewById(R.id.btnSelectInLauncher)
-        tvPermissions = findViewById(R.id.tvPermissions)
-        btnNotificationAccess = findViewById(R.id.btnNotificationAccess)
-        btnInstallAccess = findViewById(R.id.btnInstallAccess)
         builtApk = setupPrefs.getString(KEY_APK, null)?.let(::File)?.takeIf { it.exists() }
         // ActivityResultRegistry restores in-flight prompts when there is saved state.
         // A genuinely new Activity must not remain stuck waiting for a lost result.
         if (savedInstanceState == null) setupPrefs.edit().remove(KEY_AWAITING).apply()
 
-        tvResult.setTextIsSelectable(true)
-        tvResult.typeface = android.graphics.Typeface.MONOSPACE
-        tvResult.setTextSize(android.util.TypedValue.COMPLEX_UNIT_SP, 10f)
-
-        applyWindowInsets()
-
-        updateStepIndicators()
-        findViewById<android.widget.Switch>(R.id.switchAutoUpdate)?.let { toggle ->
-            val prefs = getSharedPreferences(PackageChangeReceiver.PREFS, MODE_PRIVATE)
-            toggle.isChecked = prefs.getBoolean(PackageChangeReceiver.KEY_ENABLED, true)
-            toggle.setOnCheckedChangeListener { _, checked ->
-                prefs.edit().putBoolean(PackageChangeReceiver.KEY_ENABLED, checked).apply()
-                tvStatus.text = if (checked) "Auto-update enabled" else "Auto-update disabled"
-                if (checked) {
-                    requestOperation("auto_update")
-                } else {
-                    if (setupPrefs.getString(KEY_ACTION, null) == "auto_update") {
-                        setupPrefs.edit().remove(KEY_ACTION).apply()
-                    }
-                    BuildCoordinator.setAutoUpdateEnabled(this, false)
-                }
+        ui.toggle(automationCard, "App updates", "Rebuild after apps are installed or updated", getSharedPreferences(PackageChangeReceiver.PREFS, MODE_PRIVATE).getBoolean(PackageChangeReceiver.KEY_ENABLED, true), first = true) { checked ->
+            getSharedPreferences(PackageChangeReceiver.PREFS, MODE_PRIVATE).edit().putBoolean(PackageChangeReceiver.KEY_ENABLED, checked).apply()
+            if (checked) requestOperation("auto_update") else {
+                if (setupPrefs.getString(KEY_ACTION, null) == "auto_update") setupPrefs.edit().remove(KEY_ACTION).apply()
+                BuildCoordinator.setAutoUpdateEnabled(this, false)
             }
+            refreshPermissionStatus()
         }
-
-        btnGenerate.setOnClickListener { requestOperation(ACTION_GENERATE) }
+        ui.toggle(automationCard, "Notifications", "Optional progress and results", NotificationPreferences.isEnabled(this)) { enabled ->
+            NotificationPreferences.setEnabled(this, enabled)
+            refreshPermissionStatus()
+        }
+        ui.toggle(automationCard, "Theme changes", "Refresh the pack when light or dark mode changes", ThemeRefreshController.isEnabled(this), last = true) { enabled ->
+            ThemeRefreshController.setEnabled(this, enabled)
+            refreshThemeAccess()
+        }
+        btnGenerate.setOnClickListener {
+            val phase = BuildCoordinator.state.phase
+            requestOperation(if (phase == BuildCoordinator.Phase.WAITING_CONFIRMATION || phase == BuildCoordinator.Phase.WAITING_PERMISSION) ACTION_INSTALL else ACTION_GENERATE)
+        }
         btnStopGeneration.setOnClickListener {
-            setupPrefs.edit()
-                .remove(KEY_ACTION)
-                .remove(KEY_AWAITING)
-                .putBoolean(KEY_FLOW_ACTIVE, false)
-                .apply()
+            setupPrefs.edit().remove(KEY_ACTION).remove(KEY_AWAITING).putBoolean(KEY_FLOW_ACTIVE, false).apply()
             BuildCoordinator.stopAll(this)
             renderBuildState(BuildCoordinator.state)
         }
-        btnInstall.setOnClickListener { requestOperation(ACTION_INSTALL) }
-        btnInstallAccess.setOnClickListener {
-            setupPrefs.edit().putBoolean(KEY_FLOW_ACTIVE, true).apply()
-            openInstallAccessSettings()
+        IconPackInstaller.statusListener = { onUi { syncInstallState(); refreshPermissionStatus() } }
+    }
+
+    private lateinit var automationCard: LinearLayout
+
+    private fun createHome() {
+        val root = ui.screen(this)
+        ui.header(root, "IconGen", "Making your apps a bit more Lucent!", menu = ::showMoreOptions)
+        val main = ui.card()
+        ui.add(main, ui.text("ICON PACK", 11f, muted = true))
+        tvStatus = ui.text("Ready to create", 18f)
+        tvStatus.accessibilityLiveRegion = View.ACCESSIBILITY_LIVE_REGION_POLITE
+        btnGenerate = ui.button("Create icon pack", primary = true) {}
+        ui.add(main, btnGenerate, 16)
+        ui.add(main, tvStatus, 12)
+        // The primary action is always above conditional status and access information.
+        workControls = LinearLayout(this).apply {
+            gravity = android.view.Gravity.CENTER_VERTICAL
+            minimumHeight = ui.dp(48)
+            visibility = View.GONE
         }
-        btnNotificationAccess.setOnClickListener { requestNotificationAccess() }
-        IconPackInstaller.statusListener = {
-            onUi {
-                syncInstallState()
-                refreshPermissionStatus()
+        progress = ProgressBar(this, null, android.R.attr.progressBarStyleHorizontal).apply {
+            max = 100
+            progressTintList = android.content.res.ColorStateList.valueOf(ui.ink)
+            progressBackgroundTintList = android.content.res.ColorStateList.valueOf(ui.alpha(ui.ink, .12f))
+        }
+        workControls.addView(progress, LinearLayout.LayoutParams(0, ui.dp(4), 1f))
+        btnStopGeneration = ui.button("Cancel") {}
+        workControls.addView(btnStopGeneration, LinearLayout.LayoutParams(-2, -2).apply { marginStart = ui.dp(12) })
+        ui.add(main, workControls, 8)
+        ui.add(root, main, 22)
+        ui.add(root, ui.text("Automation", 14f, muted = true), 22)
+        automationCard = ui.column()
+        ui.add(root, automationCard, 10)
+        val access = ui.card(0)
+        val setupRow = ui.row("Setup", "Checking access…", action = ::showSetup)
+        setupSummary = ((setupRow.getChildAt(0) as LinearLayout).getChildAt(1) as TextView)
+        ui.add(access, setupRow)
+        ui.add(root, access, 14)
+    }
+
+    private fun showMoreOptions() {
+        ui.dialog(this, "Icon pack") { content, dialog ->
+            ui.add(content, ui.row("Choose in launcher", "Open Nothing Launcher’s icon pack picker") { dialog.dismiss(); selectInLauncherSettings() })
+            if (builtApk?.exists() == true && !BuildCoordinator.state.isRunning && BuildCoordinator.state.phase != BuildCoordinator.Phase.QUEUED) {
+                ui.add(content, ui.row("Reinstall icon pack", "Install the last generated pack") { dialog.dismiss(); requestOperation(ACTION_INSTALL) })
             }
-        }
-        btnSelectInLauncher.setOnClickListener { selectInLauncherSettings() }
-        if (!setupPrefs.getBoolean(KEY_NOTIFICATION_ASKED, false) ||
-            !setupPrefs.getBoolean(KEY_SOURCE_ASKED, false)
-        ) {
-            setupPrefs.edit().putBoolean(KEY_FLOW_ACTIVE, true).apply()
+            ui.add(content, ui.row("Build details", "Status and diagnostic information") { dialog.dismiss(); showBuildDetails() })
+            ui.add(content, ui.button("Done") { dialog.dismiss() }, 12)
         }
     }
 
-    private fun updateStepIndicators() {
-        // Every phase starts from a clean slate, including a new build or reattachment.
-        setStep(1, false)
-        setStep(2, false)
-        setStep(3, false)
-        setStep(4, false)
-    }
-
-    private fun setStep(index: Int, completed: Boolean) {
-        val res = if (completed) R.drawable.step_circle_complete else R.drawable.step_circle_inactive
-        when (index) {
-            1 -> { step1Indicator.background = getDrawable(res); step1Status.text = if (completed) "Complete" else "Not started" }
-            2 -> { step2Indicator.background = getDrawable(res); step2Status.text = if (completed) "Complete" else "Not started" }
-            3 -> { step3Indicator.background = getDrawable(res); step3Status.text = if (completed) "Complete" else "Not started" }
-            4 -> { step4Indicator.background = getDrawable(res); step4Status.text = if (completed) "Installed" else "Not started" }
+    private fun showBuildDetails() {
+        ui.dialog(this, "Build details") { content, dialog ->
+            val state = BuildCoordinator.state
+            val description = buildString {
+                append(state.message.ifBlank { "No build is running." })
+                state.detail?.takeIf { it.isNotBlank() }?.let { append("\n\n").append(it) }
+                details.takeIf { it.isNotBlank() }?.let { append("\n\n").append(it) }
+            }
+            ui.add(content, ui.text(description, 13f).apply { setTextIsSelectable(true) })
+            ui.add(content, ui.button("Done") { dialog.dismiss() }, 20)
         }
     }
 
-    private fun setStepActive(index: Int) {
-        val res = R.drawable.step_circle_active
-        when (index) {
-            1 -> step1Indicator.background = getDrawable(res)
-            2 -> step2Indicator.background = getDrawable(res)
-            3 -> step3Indicator.background = getDrawable(res)
-            4 -> step4Indicator.background = getDrawable(res)
+    private fun showSetup() {
+        setupDialog?.dismiss()
+        setupDialog = ui.dialog(this, "Setup") { content, dialog ->
+            ui.add(content, ui.text("Allow the access IconGen needs. You stay in control of optional notifications and automation.", 14f, muted = true))
+            ui.add(content, ui.row("Icon pack installation", if (InstallAccess.canInstall(this)) "Allowed" else "Required to install your generated pack") {
+                dialog.dismiss()
+                setupPrefs.edit().putBoolean(KEY_FLOW_ACTIVE, true).apply()
+                openInstallAccessSettings()
+            }, 12)
+            ui.divider(content)
+            ui.add(content, ui.row("Settings access", if (WirelessGrantStatus.read(this).complete) "Ready · both grants enabled" else "Apply rebuilt icons and refresh theme changes") {
+                dialog.dismiss(); showSettingsAccessInstructions()
+            })
+            ui.divider(content)
+            ui.add(content, ui.row("Background icon refresh", if (LauncherRefreshAccess.isGranted(this)) "Allowed · no overlay is drawn" else "Prepare updated icons without interrupting your app") {
+                dialog.dismiss(); showBackgroundRefreshAccess()
+            })
+            ui.divider(content)
+            ui.add(content, ui.row("Notification access", if (notificationsAvailable()) "Allowed" else "Blocked · tap to manage") { dialog.dismiss(); requestNotificationAccess() })
+            ui.add(content, ui.text("Only enabled Theme changes requires a running theme-monitor service and Android’s silent monitoring notification. App updates work independently. Wireless setup uses a separate temporary pairing notification.", 12f, muted = true), 16)
+            ui.add(content, ui.row("Run setup again", "Review your feature choices and guided access setup") {
+                dialog.dismiss()
+                startActivity(Intent(this, OnboardingActivity::class.java)
+                    .putExtra(OnboardingActivity.EXTRA_RESTART, true))
+            }, 12)
+            ui.add(content, ui.button("Done") { dialog.dismiss() }, 20)
         }
     }
 
@@ -262,42 +286,50 @@ class MainActivity : AppCompatActivity() {
             notificationPermissionLauncher.launch(Manifest.permission.POST_NOTIFICATIONS)
             return
         }
-        val manager = getSystemService(NotificationManager::class.java)
-        val blockedChannel = blockedNotificationChannel()
-        val intent = if (manager.areNotificationsEnabled() && blockedChannel != null) {
-            Intent(Settings.ACTION_CHANNEL_NOTIFICATION_SETTINGS)
-                .putExtra(Settings.EXTRA_APP_PACKAGE, packageName)
-                .putExtra(Settings.EXTRA_CHANNEL_ID, blockedChannel)
-        } else {
-            Intent(Settings.ACTION_APP_NOTIFICATION_SETTINGS)
-                .putExtra(Settings.EXTRA_APP_PACKAGE, packageName)
-        }
+        val intent = NotificationAccessUi.settingsIntent(this)
         notificationSettingsLauncher.launch(intent)
     }
 
-    private fun blockedNotificationChannel(): String? {
-        val manager = getSystemService(NotificationManager::class.java)
-        return listOf("iconpack_updates_silent", "iconpack_results_silent").firstOrNull {
-            manager.getNotificationChannel(it)?.importance == NotificationManager.IMPORTANCE_NONE
+    private fun notificationsAvailable() = NotificationAccessUi.available(this)
+
+    private fun refreshPermissionStatus() {
+        val automaticApplyEnabled = ThemeRefreshController.isEnabled(this) ||
+            getSharedPreferences(PackageChangeReceiver.PREFS, MODE_PRIVATE).getBoolean(PackageChangeReceiver.KEY_ENABLED, true)
+        val missing = buildList {
+            if (!InstallAccess.canInstall(this@MainActivity)) add("installation")
+            if (automaticApplyEnabled && !WirelessGrantStatus.read(this@MainActivity).complete) add("Settings")
+            if (automaticApplyEnabled && !LauncherRefreshAccess.isGranted(this@MainActivity)) add("background refresh")
+            if (NotificationPreferences.isEnabled(this@MainActivity) && !notificationsAvailable()) add("notifications")
+        }
+        setupSummary.text = if (missing.isEmpty()) "All required access is ready" else "Access needed: ${missing.joinToString(", ")}"
+    }
+
+    private fun refreshThemeAccess() = refreshPermissionStatus()
+
+    private fun showSettingsAccessInstructions() {
+        ui.dialog(this, "Settings access") { content, dialog ->
+            ui.add(content, ui.text(SettingsAccessUi.EXPLANATION, 14f, muted = true))
+            ui.add(content, ui.text(SettingsAccessUi.status(this), 13f), 12)
+            SettingsAccessUi.addChoices(ui, content, openWireless = {
+                dialog.dismiss()
+                startActivity(Intent(this, WirelessDebuggingActivity::class.java))
+            })
+            ui.add(content, ui.button("Done") { dialog.dismiss() }, 8)
         }
     }
 
-    private fun refreshPermissionStatus() {
-        val notificationsEnabled = getSystemService(NotificationManager::class.java)
-            .areNotificationsEnabled() && blockedNotificationChannel() == null
-        val installAllowed = InstallAccess.canInstall(this)
-        val warnings = buildList {
-            if (!notificationsEnabled) {
-                add("Notifications blocked: builds can run, but progress, results and install prompts may not be visible. Open the app to finish pending installs.")
+    private fun showBackgroundRefreshAccess() {
+        ui.dialog(this, "Background icon refresh") { content, dialog ->
+            ui.add(content, ui.text(SettingsAccessUi.BACKGROUND_EXPLANATION, 14f))
+            if (!LauncherRefreshAccess.isGranted(this)) {
+                ui.add(content, ui.text("Select IconGen in Android’s app list, allow Display over other apps, then return here.", 13f, muted = true), 12)
             }
-            if (!installAllowed) {
-                add("Install access required: allow this app to install icon packs. A requested operation will wait for approval.")
-            }
+            ui.add(content, ui.button("Open access settings", primary = true) {
+                dialog.dismiss()
+                backgroundAccessLauncher.launch(LauncherRefreshAccess.settingsIntent(this))
+            }, 20)
+            ui.add(content, ui.button("Done") { dialog.dismiss() }, 8)
         }
-        tvPermissions.text = warnings.joinToString("\n")
-        tvPermissions.visibility = if (warnings.isEmpty()) View.GONE else View.VISIBLE
-        btnNotificationAccess.visibility = if (notificationsEnabled) View.GONE else View.VISIBLE
-        btnInstallAccess.visibility = if (installAllowed) View.GONE else View.VISIBLE
     }
 
     private fun resumeRequestedOperation() {
@@ -359,82 +391,51 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun renderBuildState(state: BuildCoordinator.State) {
-        updateStepIndicators()
-        tvResult.text = state.error.orEmpty()
-        btnInstall.text = if (state.phase == BuildCoordinator.Phase.WAITING_CONFIRMATION) {
-            "Confirm Icon Pack Install"
-        } else {
-            "Install Icon Pack"
-        }
+        details = state.error.orEmpty()
         state.apkPath?.let {
             builtApk = File(it).takeIf { apk -> apk.exists() }
             setupPrefs.edit().putString(KEY_APK, it).apply()
         }
-        when (state.phase) {
-            BuildCoordinator.Phase.IDLE -> {
-                tvStatus.text = "Ready"
-                btnGenerate.isEnabled = true
-                btnInstall.isEnabled = builtApk != null && builtApk!!.exists()
-            }
-            BuildCoordinator.Phase.STOPPED -> {
-                tvStatus.text = state.message.ifBlank { "All generation stopped" }
-                btnGenerate.isEnabled = true
-                btnInstall.isEnabled = builtApk?.exists() == true
-            }
-            BuildCoordinator.Phase.FAILED -> {
-                tvStatus.text = "FAILED: ${state.error?.lineSequence()?.firstOrNull() ?: "unknown"}"
-                tvResult.text = state.error ?: ""
-                btnGenerate.isEnabled = true
-                btnInstall.isEnabled = builtApk?.exists() == true
-            }
-            BuildCoordinator.Phase.DONE -> {
-                tvStatus.text = state.message
-                setStep(1, true); setStep(2, true); setStep(3, true); setStep(4, true)
-                btnGenerate.isEnabled = true
-                state.apkPath?.let { builtApk = File(it) }
-                btnInstall.isEnabled = false
-            }
-            BuildCoordinator.Phase.WAITING_PERMISSION,
-            BuildCoordinator.Phase.WAITING_CONFIRMATION -> {
-                tvStatus.text = state.message
-                setStep(1, true); setStep(2, true); setStep(3, true)
-                setStepActive(4)
-                step4Status.text = state.message
-                btnGenerate.isEnabled = false
-                btnInstall.isEnabled = true
-                refreshPermissionStatus()
-            }
-            else -> {
-                btnGenerate.isEnabled = false
-                btnInstall.isEnabled = false
-                tvStatus.text = state.message
-                when (state.phase) {
-                    BuildCoordinator.Phase.SCANNING -> {
-                        setStepActive(1); step1Status.text = "Scanning..."
-                    }
-                    BuildCoordinator.Phase.GENERATING -> {
-                        setStep(1, true); setStepActive(2); step2Status.text = "Generating..."
-                    }
-                    BuildCoordinator.Phase.COMPILING -> {
-                        setStep(1, true); setStep(2, true); setStepActive(3); step3Status.text = "Compiling..."
-                    }
-                    BuildCoordinator.Phase.INSTALLING -> {
-                        setStep(1, true); setStep(2, true); setStep(3, true); setStepActive(4); step4Status.text = "Installing..."
-                    }
-                    else -> Unit
-                }
-            }
+        val pending = state.phase == BuildCoordinator.Phase.WAITING_CONFIRMATION || state.phase == BuildCoordinator.Phase.WAITING_PERMISSION
+        val working = state.isRunning || state.phase == BuildCoordinator.Phase.QUEUED
+        val installed = packInstalled()
+        btnGenerate.text = when (state.phase) {
+            BuildCoordinator.Phase.WAITING_CONFIRMATION -> "Approve installation"
+            BuildCoordinator.Phase.WAITING_PERMISSION -> "Finish installation"
+            else -> if (installed || builtApk?.exists() == true) "Update icon pack" else "Create icon pack"
         }
+        btnGenerate.isEnabled = !working
+        workControls.visibility = if (working || pending) View.VISIBLE else View.GONE
+        progress.visibility = if (working) View.VISIBLE else View.INVISIBLE
+        btnStopGeneration.visibility = if (working || pending) View.VISIBLE else View.INVISIBLE
+        progress.isIndeterminate = state.phase == BuildCoordinator.Phase.QUEUED || state.percent <= 0
+        progress.progress = state.percent.coerceIn(0, 100)
+        tvStatus.text = when (state.phase) {
+            BuildCoordinator.Phase.IDLE -> if (installed) "Your icon pack is ready" else "Ready to create"
+            BuildCoordinator.Phase.STOPPED -> state.message.ifBlank { "Generation stopped" }
+            BuildCoordinator.Phase.FAILED -> "Couldn’t update the pack. See Build details."
+            BuildCoordinator.Phase.WAITING_PERMISSION -> "Allow installation to finish your pack"
+            BuildCoordinator.Phase.WAITING_CONFIRMATION -> "Your pack is ready for approval"
+            else -> state.message.ifBlank { if (working) "Updating your icon pack…" else "Your icon pack is ready" }
+        }
+        if (pending) refreshPermissionStatus()
+    }
+
+    private fun packInstalled(): Boolean = try {
+        packageManager.getPackageInfo("com.nothing.icongen.pack", 0)
+        true
+    } catch (_: PackageManager.NameNotFoundException) {
+        false
     }
 
     private fun installIconPack() {
         val apk = builtApk
         if (apk == null || !apk.exists()) {
-            tvStatus.text = "FAILED: no built APK found"
-            tvResult.text = "Build the APK first (step 3)."
+            tvStatus.text = "Create an icon pack before reinstalling"
+            details = "No generated APK is available."
             return
         }
-        btnInstall.isEnabled = false
+        btnGenerate.isEnabled = false
         tvStatus.text = "Installing..."
         val cancellation = BuildCoordinator.cancellation(this)
         Thread {
@@ -449,9 +450,9 @@ class MainActivity : AppCompatActivity() {
                     if (BuildCoordinator.state.phase == BuildCoordinator.Phase.STOPPED) {
                         renderBuildState(BuildCoordinator.state)
                     } else {
-                        tvStatus.text = "FAILED: ${t.message ?: t.javaClass.name}"
-                        tvResult.text = t.stackTraceToString()
-                        btnInstall.isEnabled = true
+                        tvStatus.text = "Installation failed. See Build details."
+                        details = t.stackTraceToString()
+                        btnGenerate.isEnabled = true
                     }
                 }
             }
@@ -466,14 +467,25 @@ class MainActivity : AppCompatActivity() {
         renderBuildState(state)
     }
 
+    override fun onNewIntent(intent: Intent) {
+        super.onNewIntent(intent)
+        setIntent(intent)
+    }
+
     override fun onResume() {
         super.onResume()
+        if (!::ui.isInitialized) return
         activityResumed = true
         IconPackInstaller.restoreState(this)
         // Re-attach: the build may have started while this Activity did not exist.
         BuildCoordinator.addListener(buildListener)
         syncInstallState()
         advancePermissionSetup()
+        BackgroundMonitorService.sync(this)
+        if (intent.getBooleanExtra(EXTRA_THEME_ACCESS, false)) {
+            intent.removeExtra(EXTRA_THEME_ACCESS)
+            showSettingsAccessInstructions()
+        }
     }
 
     override fun onPause() {
@@ -489,20 +501,6 @@ class MainActivity : AppCompatActivity() {
 
     private fun onUi(block: () -> Unit) = runOnUiThread(block)
 
-    private fun applyWindowInsets() {
-        val root = findViewById<View>(R.id.rootScroll)
-        val density = resources.displayMetrics.density
-        val base = (16 * density).toInt()
-        androidx.core.view.ViewCompat.setOnApplyWindowInsetsListener(root) { v, insets ->
-            val bars = insets.getInsets(
-                androidx.core.view.WindowInsetsCompat.Type.systemBars() or
-                    androidx.core.view.WindowInsetsCompat.Type.displayCutout(),
-            )
-            v.setPadding(bars.left + base, bars.top + base, bars.right + base, bars.bottom + base)
-            insets
-        }
-        androidx.core.view.ViewCompat.requestApplyInsets(root)
-    }
 
     private fun selectInLauncherSettings() {
         val intent = Intent().apply {
@@ -516,12 +514,11 @@ class MainActivity : AppCompatActivity() {
         }
         try {
             startActivity(intent)
-        } catch (e: Exception) {
-            Toast.makeText(
-                this,
-                "Cannot open icon pack settings. Manually select in launcher settings.",
-                Toast.LENGTH_LONG,
-            ).show()
+        } catch (_: Exception) {
+            ui.dialog(this, "Choose your icon pack") { content, dialog ->
+                ui.add(content, ui.text("The launcher’s icon pack picker could not be opened. Open Nothing Launcher settings and select your generated IconGen pack manually.", 14f))
+                ui.add(content, ui.button("Done") { dialog.dismiss() }, 20)
+            }
         }
     }
 }

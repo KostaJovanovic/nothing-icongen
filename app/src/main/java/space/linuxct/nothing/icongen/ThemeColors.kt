@@ -61,7 +61,7 @@ object ThemeColors {
         private val monoClass = loader.loadClass("x9.f")
         private val companionClass = loader.loadClass("x9.f\$a")
         private val companion = monoClass.getField("l").get(null)
-        // Invoke x9.f$a's actual dynamic-token resolver without its global selected-pack branch.
+        // Resolve the dynamic token independently of the global selected-pack preference.
         private val dynamicColor = companionClass.getDeclaredMethod(
             "c", Context::class.java, String::class.java, Int::class.javaPrimitiveType,
         ).apply { isAccessible = true }
@@ -75,8 +75,7 @@ object ThemeColors {
             if (isLucent) {
                 dynamicColor.invoke(companion, context, "content_on_solid_primary", lucentForegroundFallback) as Int
             } else {
-                // Nothing's neutral role, even when a generated/external pack is selected. Native
-                // x9.f$a.b would otherwise use the unrelated Material-colour pack's accent role.
+                // Keep the neutral foreground role even when an external pack is selected.
                 context.getColor(nothingForeground)
             }
 

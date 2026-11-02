@@ -4,7 +4,7 @@ import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.drawable.Drawable
 
-/** Shared by generation and on-device verification; extraction is the installed launcher code. */
+/** Shared rendering pipeline for generation and on-device verification. */
 class IconPipeline(context: Context) : AutoCloseable {
     private val renderer = NothingIconRenderer(context)
     private var encoder: PackIconEncoder? = null

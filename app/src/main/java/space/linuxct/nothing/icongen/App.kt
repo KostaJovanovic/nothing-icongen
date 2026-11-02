@@ -2,6 +2,8 @@ package space.linuxct.nothing.icongen
 
 import android.app.Application
 import android.util.Log
+import android.os.Handler
+import android.os.Looper
 import java.io.File
 import java.io.FileOutputStream
 
@@ -26,6 +28,13 @@ class App : Application() {
         super.onCreate()
         instance = this
         PackageChangeMonitor.register(this)
+        BackgroundMonitorService.sync(this, refresh = true)
+        // A manifest install callback must run before disappearance-of-session recovery;
+        // it can authoritatively confirm a same-version reinstall.
+        Handler(Looper.getMainLooper()).post {
+            IconPackInstaller.restoreState(this)
+            IconPackSelectionJobService.schedule(this)
+        }
     }
 
     /**

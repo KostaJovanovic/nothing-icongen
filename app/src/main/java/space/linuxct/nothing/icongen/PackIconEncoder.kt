@@ -10,7 +10,7 @@ import kotlin.math.roundToInt
 import kotlin.math.sqrt
 
 /**
- * Inverts Nothing 5.0.6's software pack draw: source, black shadows, source again.
+ * Compensates for repeated compositing: source, black shadows, source again.
  * Input is the intended single-composite artwork; output is the PNG sent to the launcher.
  * Alpha is the primary constraint. RGB is clamped where a black shadow makes the target
  * mathematically unreachable (in particular, translucent pure white).
@@ -23,7 +23,7 @@ internal class PackIconEncoder(private val size: Int = IconArtwork.ICON_SIZE) : 
     private val target = IntArray(size * size)
     private val shadowPixels = IntArray(size * size)
     private val offset = IntArray(2)
-    // IconOptions.iconScale = .92. Translate native shadow dimensions back into PNG space;
+    // Translate shadow dimensions from the 0.92 host scale back into PNG space;
     // do not scale the actual artwork, which the host already positions and scales.
     private val hostScale = (size - 2 * (size * (1f - .92f) / 2f).roundToInt()).toFloat() / size
     private val blurPaint = Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG).apply {

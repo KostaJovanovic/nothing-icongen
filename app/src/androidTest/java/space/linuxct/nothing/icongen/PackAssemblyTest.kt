@@ -15,7 +15,7 @@ import org.junit.runner.RunWith
 import java.io.File
 import java.util.zip.ZipFile
 
-/** ZIP behavior belongs on-device because palette resolution executes installed launcher code. */
+/** ZIP and configuration-dependent palette integration checks run on-device. */
 @RunWith(AndroidJUnit4::class)
 class PackAssemblyTest {
     @Test

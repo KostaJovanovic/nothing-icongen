@@ -82,7 +82,7 @@ class JvmIconRenderTest {
         try {
             assertSame(alternative, glyphs.forColor(light.foreground))
             assertSame(normal, glyphs.forColor(dark.foreground))
-            // Native uses weighted RGB, not red, average RGB, alpha, or the system night flag.
+            // Selection uses weighted RGB, not red, average RGB, alpha, or the system night flag.
             assertSame(normal, glyphs.forColor(Color.GREEN))
             assertSame(alternative, glyphs.forColor(Color.MAGENTA))
             assertSame(alternative, glyphs.forColor(0xFF808080.toInt()))

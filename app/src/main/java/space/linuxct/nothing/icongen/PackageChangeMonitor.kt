@@ -8,6 +8,8 @@ import android.content.Intent
 import android.content.IntentFilter
 import android.content.pm.LauncherApps
 import android.os.Process
+import android.os.Handler
+import android.os.Looper
 import android.os.UserManager
 import android.util.Log
 import java.io.File
@@ -20,25 +22,43 @@ object PackageChangeMonitor {
     private const val PREFS = "package_monitor"
     private const val INSTALLED = "installed_fingerprint"
     private const val OBSERVED = "observed_packages"
+    private var registeredContext: Context? = null
+    private var activationPosted = false
 
+    @Synchronized
     fun register(context: Context) {
-        val filter = IntentFilter().apply {
-            addAction(Intent.ACTION_PACKAGE_ADDED)
-            addAction(Intent.ACTION_PACKAGE_REMOVED)
-            addDataScheme("package")
+        val app = context.applicationContext
+        if (registeredContext !== app) {
+            val filter = IntentFilter().apply {
+                addAction(Intent.ACTION_PACKAGE_ADDED)
+                addAction(Intent.ACTION_PACKAGE_REMOVED)
+                addDataScheme("package")
+            }
+            app.registerReceiver(PackageChangeReceiver(), filter, Context.RECEIVER_EXPORTED)
+            registeredContext = app
         }
-        context.registerReceiver(PackageChangeReceiver(), filter, Context.RECEIVER_EXPORTED)
-        // A missing baseline means first installation, not that every existing app is new.
-        // An existing baseline survives process death and is reconciled, not overwritten.
-        reconcile(context)
-        ensureScheduled(context)
-        BuildCoordinator.resumeQueued(context)
+        if (!OnboardingState.isComplete(app) || activationPosted) return
+        ensureScheduled(app)
+        activationPosted = true
+        // App.onCreate runs before a manifest receiver. Let its authoritative package
+        // event consume the snapshot first, otherwise a cold start can request two builds.
+        Handler(Looper.getMainLooper()).post {
+            synchronized(this) { activationPosted = false }
+            if (OnboardingState.isComplete(app)) {
+                reconcile(app)
+                BuildCoordinator.resumeQueued(app)
+            }
+        }
     }
 
     fun ensureScheduled(context: Context) {
-        if (!context.getSharedPreferences(PackageChangeReceiver.PREFS, Context.MODE_PRIVATE)
-                .getBoolean(PackageChangeReceiver.KEY_ENABLED, true)) return
         val scheduler = context.getSystemService(JobScheduler::class.java)
+        if (!OnboardingState.isComplete(context) ||
+            !context.getSharedPreferences(PackageChangeReceiver.PREFS, Context.MODE_PRIVATE)
+                .getBoolean(PackageChangeReceiver.KEY_ENABLED, true)) {
+            scheduler.cancel(JOB_ID)
+            return
+        }
         if (scheduler.getPendingJob(JOB_ID) == null) {
             val result = scheduler.schedule(JobInfo.Builder(JOB_ID, ComponentName(context, IconPackBuildJobService::class.java))
                 .setPeriodic(15 * 60 * 1000L).setPersisted(true).build())
@@ -129,7 +149,9 @@ object PackageChangeMonitor {
         val enabled = context.getSharedPreferences(PackageChangeReceiver.PREFS, Context.MODE_PRIVATE)
             .getBoolean(PackageChangeReceiver.KEY_ENABLED, true)
         Log.d("PackageChangeMonitor", "Observed ${current.size} packages installOrUpdate=$changed enabled=$enabled")
-        if (changed && allowBuild && enabled) BuildCoordinator.start(context, "package:install-or-update")
+        if (changed && allowBuild && enabled && OnboardingState.isComplete(context)) {
+            BuildCoordinator.start(context, "package:install-or-update")
+        }
     }
 
     /** Only the snapshot taken BEFORE the successful build is acknowledged. */

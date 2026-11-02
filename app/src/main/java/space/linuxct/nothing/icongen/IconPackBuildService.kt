@@ -1,7 +1,6 @@
 package space.linuxct.nothing.icongen
 
 import android.Manifest
-import android.app.AlarmManager
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
@@ -20,6 +19,10 @@ object IconPackBuildService {
     private const val CHANNEL_DONE = "iconpack_results_silent"
     private const val NOTIFICATION_ID = 42
     private const val RESULT_ID = 43
+    private const val THEME_ACCESS_ID = 44
+    private const val NOTIFICATION_TIMEOUT_MS = 60_000L
+
+    enum class ResultKind { SUCCESS, ERROR, ACTION_REQUIRED }
 
     fun build(context: Context, cancellation: BuildCoordinator.Cancellation): File {
         Log.d(TAG, "Build started")
@@ -30,7 +33,7 @@ object IconPackBuildService {
                 message = "Scanning installed apps", percent = 5, startedAt = System.currentTimeMillis())
         }
         val observer: (BuildCoordinator.State) -> Unit = { state ->
-            if (state.isRunning) postProgress(context, state)
+            updateProgress(context, state)
         }
         BuildCoordinator.addListener(observer)
         try {
@@ -48,14 +51,25 @@ object IconPackBuildService {
             return IconPackAssembler.compileApk(context.applicationContext, zip, cancellation)
         } finally {
             BuildCoordinator.removeListener(observer)
-            context.getSystemService(NotificationManager::class.java).cancel(NOTIFICATION_ID)
+            cancelProgress(context)
         }
+    }
+
+    fun updateProgress(context: Context, state: BuildCoordinator.State) = synchronized(BuildCoordinator) {
+        if (state != BuildCoordinator.state) return@synchronized
+        if (state.isRunning && !BuildCoordinator.isStopped(context)) postProgress(context, state)
+        else cancelProgress(context)
+    }
+
+    fun cancelProgress(context: Context) {
+        context.getSystemService(NotificationManager::class.java).cancel(NOTIFICATION_ID)
     }
 
     fun cancelNotifications(context: Context) {
         val manager = context.getSystemService(NotificationManager::class.java)
         manager.cancel(NOTIFICATION_ID)
         manager.cancel(RESULT_ID)
+        manager.cancel(THEME_ACCESS_ID)
     }
 
     private fun openApp(context: Context): PendingIntent = PendingIntent.getActivity(
@@ -63,10 +77,11 @@ object IconPackBuildService {
         PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
     )
 
-    private fun postProgress(context: Context, state: BuildCoordinator.State) {
-        if (!canNotify(context)) return
+    private fun postProgress(context: Context, state: BuildCoordinator.State) = synchronized(NotificationPreferences) {
+        if (!canNotify(context)) return@synchronized
         val notification = Notification.Builder(context, CHANNEL)
-            .setSmallIcon(android.R.drawable.stat_notify_sync)
+            .setSmallIcon(R.drawable.ic_notification_sync_animated)
+            .setLargeIcon(NotificationArtwork.state(context, R.drawable.ic_notification_sync_animated))
             .setContentTitle("Updating icon pack")
             .setContentText(state.message)
             .setContentIntent(openApp(context))
@@ -76,7 +91,9 @@ object IconPackBuildService {
             .setShowWhen(false)
             .setVisibility(Notification.VISIBILITY_SECRET)
             .setDefaults(0)
+            .setSound(null)
             .setProgress(100, state.percent.coerceIn(0, 100), false)
+            .setTimeoutAfter(NOTIFICATION_TIMEOUT_MS)
             .apply {
                 if (Build.VERSION.SDK_INT >= 36) {
                     setStyle(Notification.ProgressStyle()
@@ -94,20 +111,54 @@ object IconPackBuildService {
         context.getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, notification)
     }
 
-    fun postResult(context: Context, title: String, message: String, action: PendingIntent? = null, transient: Boolean = false) {
+    fun cancelThemeAccessReminder(context: Context) {
+        context.getSystemService(NotificationManager::class.java).cancel(THEME_ACCESS_ID)
+    }
+
+    fun postThemeAccessReminder(context: Context, failure: String) = synchronized(ThemeRefreshController) {
+        if (!OnboardingState.isComplete(context) || !ThemeRefreshController.isEnabled(context)) return@synchronized
+        val action = PendingIntent.getActivity(
+            context, THEME_ACCESS_ID,
+            Intent(context, MainActivity::class.java)
+                .addFlags(Intent.FLAG_ACTIVITY_SINGLE_TOP or Intent.FLAG_ACTIVITY_CLEAR_TOP)
+                .putExtra(MainActivity.EXTRA_THEME_ACCESS, true),
+            PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE,
+        )
+        postNotice(context, THEME_ACCESS_ID, "Automatic theme refresh needs Settings access",
+            "$failure\nRun the PC commands or use IconGen's built-in wireless ADB setup. " +
+                "Automatic light/dark icon refresh cannot work until Settings access is available.",
+            ResultKind.ACTION_REQUIRED, action)
+    }
+
+    fun postResult(
+        context: Context,
+        title: String,
+        message: String,
+        kind: ResultKind,
+        action: PendingIntent? = null,
+    ) = postNotice(context, RESULT_ID, title, message, kind, action)
+
+    private fun postNotice(
+        context: Context,
+        id: Int,
+        title: String,
+        message: String,
+        kind: ResultKind,
+        action: PendingIntent?,
+    ) = synchronized(NotificationPreferences) {
+        if (!canNotify(context)) return@synchronized
         ensureChannels(context)
-        val dismiss = PendingIntent.getBroadcast(context, RESULT_ID,
-            Intent(context, NotificationDismissReceiver::class.java).apply {
-                this.action = NotificationDismissReceiver.ACTION_DISMISS
-                putExtra(NotificationDismissReceiver.EXTRA_ID, RESULT_ID)
-            }, PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE)
-        val alarm = context.getSystemService(AlarmManager::class.java)
-        alarm.cancel(dismiss)
-        if (!canNotify(context)) return
+        val icon = when (kind) {
+            ResultKind.SUCCESS -> R.drawable.ic_notification_success
+            ResultKind.ERROR -> R.drawable.ic_notification_error
+            ResultKind.ACTION_REQUIRED -> R.drawable.ic_notification_waiting
+        }
         val notification = Notification.Builder(context, CHANNEL_DONE)
-            .setSmallIcon(android.R.drawable.stat_notify_sync)
+            .setSmallIcon(icon)
+            .setLargeIcon(NotificationArtwork.state(context, icon))
             .setContentTitle(title)
             .setContentText(message)
+            .setStyle(Notification.BigTextStyle().bigText(message))
             .setContentIntent(action ?: openApp(context))
             .setPriority(Notification.PRIORITY_LOW)
             .setOnlyAlertOnce(true)
@@ -115,14 +166,16 @@ object IconPackBuildService {
             .setShowWhen(false)
             .setVisibility(Notification.VISIBILITY_SECRET)
             .setDefaults(0)
+            .setSound(null)
             .setAutoCancel(true)
-            .apply { if (transient) setTimeoutAfter(60_000L) }
+            .setTimeoutAfter(NOTIFICATION_TIMEOUT_MS)
             .build()
-        context.getSystemService(NotificationManager::class.java).notify(RESULT_ID, notification)
+        context.getSystemService(NotificationManager::class.java).notify(id, notification)
     }
 
     private fun canNotify(context: Context): Boolean =
-        context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED &&
+        NotificationPreferences.isEnabled(context) &&
+            context.checkSelfPermission(Manifest.permission.POST_NOTIFICATIONS) == PackageManager.PERMISSION_GRANTED &&
             context.getSystemService(NotificationManager::class.java).areNotificationsEnabled()
 
     fun ensureChannels(context: Context) {

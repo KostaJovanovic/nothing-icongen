@@ -1,0 +1,28 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- SystemUI starts AnimationDrawable icons in both the shade and status bar. -->
+<animation-list xmlns:android="http://schemas.android.com/apk/res/android" android:oneshot="false">
+    <item android:drawable="@drawable/ic_notification_sync_00" android:duration="50" />
+    <item android:drawable="@drawable/ic_notification_sync_23" android:duration="50" />
+    <item android:drawable="@drawable/ic_notification_sync_22" android:duration="50" />
+    <item android:drawable="@drawable/ic_notification_sync_21" android:duration="50" />
+    <item android:drawable="@drawable/ic_notification_sync_20" android:duration="50" />
+    <item android:drawable="@drawable/ic_notification_sync_19" android:duration="50" />
+    <item android:drawable="@drawable/ic_notification_sync_18" android:duration="50" />
+    <item android:drawable="@drawable/ic_notification_sync_17" android:duration="50" />
+    <item android:drawable="@drawable/ic_notification_sync_16" android:duration="50" />
+    <item android:drawable="@drawable/ic_notification_sync_15" android:duration="50" />
+    <item android:drawable="@drawable/ic_notification_sync_14" android:duration="50" />
+    <item android:drawable="@drawable/ic_notification_sync_13" android:duration="50" />
+    <item android:drawable="@drawable/ic_notification_sync_12" android:duration="50" />
+    <item android:drawable="@drawable/ic_notification_sync_11" android:duration="50" />
+    <item android:drawable="@drawable/ic_notification_sync_10" android:duration="50" />
+    <item android:drawable="@drawable/ic_notification_sync_09" android:duration="50" />
+    <item android:drawable="@drawable/ic_notification_sync_08" android:duration="50" />
+    <item android:drawable="@drawable/ic_notification_sync_07" android:duration="50" />
+    <item android:drawable="@drawable/ic_notification_sync_06" android:duration="50" />
+    <item android:drawable="@drawable/ic_notification_sync_05" android:duration="50" />
+    <item android:drawable="@drawable/ic_notification_sync_04" android:duration="50" />
+    <item android:drawable="@drawable/ic_notification_sync_03" android:duration="50" />
+    <item android:drawable="@drawable/ic_notification_sync_02" android:duration="50" />
+    <item android:drawable="@drawable/ic_notification_sync_01" android:duration="50" />
+</animation-list>

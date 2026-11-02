@@ -18,7 +18,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import java.io.File
 
-/** The oracle executes the installed delegate, not a Kotlin translation of its algorithm. */
+/** Compares exported artwork with independently rendered reference images. */
 @RunWith(AndroidJUnit4::class)
 class LauncherParityTest {
     @Test
@@ -76,7 +76,7 @@ class LauncherParityTest {
     }
 }
 
-/** Test-only reflection oracle pinned to the APK whose API was decoded and exercised. */
+/** Test-only reference renderer for pixel comparisons. */
 internal class NativeLauncherOracle(context: Context) : AutoCloseable {
     val launcher = requireLauncher(context)
     private val loader = launcher.classLoader
@@ -108,7 +108,7 @@ internal class NativeLauncherOracle(context: Context) : AutoCloseable {
                 Path::class.java, BooleanArray::class.java).invoke(normalizer, source, null, null) as Float
             val mono = factoryClass.getMethod("getMonochromeGenerator").invoke(factory)
             mono.javaClass.getMethod("w", Float::class.javaPrimitiveType, String::class.java).invoke(mono, scale, null)
-            // Native ga.i.k must rasterize its selected drawable, not a supplied blank cache.
+            // A null cache requests the selected drawable rather than a supplied blank bitmap.
             val info = infoClass.getConstructor(Context::class.java, Drawable::class.java,
                 Bitmap::class.java).newInstance(launcher, source, null)
             if (infoClass.getMethod("b").invoke(info) == null) {
@@ -131,7 +131,7 @@ internal class NativeLauncherOracle(context: Context) : AutoCloseable {
         }
     }
 
-    /** Native clipping, polarity, tint and drawing all execute inside ThemedIconDelegate. */
+    /** Reference rendering includes clipping, polarity, tint and drawing. */
     fun drawDelegate(masks: Masks, palette: ThemeColors.Palette): Bitmap {
         val size = IconArtwork.ICON_SIZE
         val shapeClass = loader.loadClass("com.android.launcher3.icons.IconShape")

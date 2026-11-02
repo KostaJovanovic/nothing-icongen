@@ -229,9 +229,7 @@ object IconPackAssembler {
         android:icon="@mipmap/ic_launcher"
         android:hasCode="false"
         android:supportsRtl="true">
-        <!-- Nothing Launcher discovers icon packs ONLY through these theme intents
-             (see aa.b.c -> queryIntentActivities). Without an activity matching them
-             the pack is installed but never listed in the picker. -->
+        <!-- These theme intents make the pack available in the icon pack picker. -->
         <activity
             android:name=".IconPackThemeActivity"
             android:exported="true"
@@ -265,13 +263,11 @@ object IconPackAssembler {
         val xmlDir = File(outputDir, "res/xml")
         xmlDir.mkdirs()
 
-        // ea.b parses every <item> element and looks up the drawable by plain resource
-        // name (getIdentifier(name, "drawable", packPackage)), so no "drawable/" prefix.
+        // Drawable references use plain resource names, without a "drawable/" prefix.
         val appfilterXml = StringBuilder()
         appfilterXml.append("""<?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <!-- ea.b applies iconback/iconmask/iconupon to every icon it does not map explicitly,
-         which is how the frosted plate gets behind the whole grid. -->
+    <!-- The background plate also covers icons without an explicit mapping. -->
     <iconback img1="icon_background" />
 """)
         for (entry in entries) {

@@ -14,7 +14,7 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import java.io.File
 
-/** Actual installed app drawables, installed launcher code, and final pullable day/night PNGs. */
+/** Installed app drawables and final pullable day/night PNGs. */
 @RunWith(AndroidJUnit4::class)
 class RealIconPipelineTest {
     @Test

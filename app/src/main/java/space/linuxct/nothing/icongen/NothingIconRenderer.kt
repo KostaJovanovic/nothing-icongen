@@ -9,9 +9,9 @@ import android.graphics.Path
 import android.graphics.drawable.Drawable
 import java.lang.reflect.InvocationTargetException
 
-/** Owned snapshots of ga.c; native scratch/pool bitmaps must never escape the renderer. */
+/** Owned bitmap snapshots; scratch and pooled bitmaps must never escape the renderer. */
 class LauncherGlyphs(val normal: Bitmap, val light: Bitmap? = null) {
-    /** Exact ga.c$a / ia.d.e selection, based on the ink, not the background or night mode. */
+    /** Selects by weighted ink brightness, not the background or night mode. */
     fun forColor(color: Int): Bitmap =
         if (0.2126 * Color.red(color) + 0.7152 * Color.green(color) +
             0.0722 * Color.blue(color) > 128.0
@@ -23,7 +23,7 @@ class LauncherGlyphs(val normal: Bitmap, val light: Bitmap? = null) {
     }
 }
 
-/** Executes the installed 5.0.6 mono pipeline; there is deliberately no substitute extractor. */
+/** Renders monochrome glyphs while retaining independent bitmap ownership. */
 class NothingIconRenderer(context: Context) : AutoCloseable {
     private val launcher = NothingLauncherRuntime.application(context)
     private val api = launcherCall("initialize the monochrome renderer") { NativeApi(launcher) }
@@ -36,7 +36,7 @@ class NothingIconRenderer(context: Context) : AutoCloseable {
         // changes child bounds as well as the outer adaptive drawable, so restoring only the
         // outer Rect is insufficient. Use an independent resource instance for each render.
         val source = drawable.constantState?.newDrawable()?.mutate() ?: drawable
-        // Launcher methods change bounds while rasterizing. Do not alter the caller's drawable.
+        // Rasterization changes bounds. Do not alter the caller's drawable.
         val left = drawable.bounds.left
         val top = drawable.bounds.top
         val right = drawable.bounds.right
@@ -48,16 +48,13 @@ class NothingIconRenderer(context: Context) : AutoCloseable {
         try {
             return launcherCall("generate a monochrome glyph for ${drawable.javaClass.name}") {
                 val scale = api.scale.invoke(api.normalizer, source, null, null) as Float
-                // aa.a.b: reset the mono generator with exactly the source normalizer's scale.
+                // Reset the mono generator with exactly the source normalizer's scale.
                 api.prepare.invoke(api.monochromeGenerator, scale, null)
-                // ea.h accepts a nullable cached bitmap (BaseIconFactory.createMonoInfo does
-                // not). With no cache, ga.i.k renders the native selected drawable itself via
-                // BaseIconFactory.createNormalizedBitmap into its own pool lease. Never give
-                // it a blank cache or approximate its selected-drawable rasterization here.
+                // A null cache requests rasterization of the selected drawable into a pool lease.
+                // Supplying a blank bitmap would bypass that rendering.
                 val info = api.monoInfo.newInstance(launcher, source, null)
                 if (api.declaredMono.invoke(info) == null) {
-                    // ea.i's constructor performs this same force-2 selection. Do not let the
-                    // currently selected external icon pack disable Nothing's native fallback.
+                    // Force monochrome fallback regardless of the selected external icon pack.
                     api.forceMode.invoke(info, 2)
                 }
                 val generator = api.generator.newInstance(launcher, scale, api.factory)

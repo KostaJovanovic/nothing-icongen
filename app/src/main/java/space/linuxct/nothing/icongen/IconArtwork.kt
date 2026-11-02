@@ -11,9 +11,9 @@ import android.graphics.PorterDuffColorFilter
 object IconArtwork {
     const val ICON_SIZE = 432
 
-    // ThemedIconDelegate.drawContent paints its background at 0.93, then restores the canvas
-    // before drawing the mono bitmap. Our pack fills the circular plate, so expand the native
-    // glyph coordinate space by the same ratio. The host scales the finished PNG uniformly.
+    // The background occupies 0.93 of the glyph coordinate space. Our pack fills the
+    // circular plate, so expand the glyph coordinates by the same ratio.
+    // The host scales the finished PNG uniformly.
     private const val NATIVE_BACKGROUND_SCALE = 0.93f
 
     fun buildPlate(palette: ThemeColors.Palette): Bitmap =

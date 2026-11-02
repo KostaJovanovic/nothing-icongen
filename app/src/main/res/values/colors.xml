@@ -1,3 +1,4 @@
 <resources>
     <color name="icon_brand_background">#17191B</color>
+    <color name="lucent_starting_window">@android:color/system_neutral1_50</color>
 </resources>

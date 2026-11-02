@@ -8,6 +8,7 @@ import android.content.pm.ApplicationInfo
 import android.content.pm.PackageInfo
 import android.content.pm.PackageInstaller
 import android.net.Uri
+import android.os.Looper
 import java.io.File
 import java.util.concurrent.CancellationException
 import java.util.concurrent.TimeUnit
@@ -29,7 +30,10 @@ class AutomaticPipelineTest {
     private fun prefs(name: String) = context.getSharedPreferences(name, Context.MODE_PRIVATE)
 
     @Before fun setUp() {
-        for (name in listOf("build_queue", "install_state", "auto_update", "package_monitor")) prefs(name).edit().clear().commit()
+        for (name in listOf("build_queue", "install_state", "auto_update", "package_monitor", "onboarding", "theme_refresh")) {
+            prefs(name).edit().clear().commit()
+        }
+        OnboardingState.markComplete(context)
         context.getSystemService(JobScheduler::class.java).cancelAll()
         BuildCoordinator.reset()
         IconPackInstaller.statusListener = null
@@ -119,12 +123,71 @@ class AutomaticPipelineTest {
 
     @Test fun committedOperationIsNotDoneUntilItsOwnSuccessCallback() {
         operation()
+        installedPackage(PackageChangeReceiver.PACK_PACKAGE, 43)
         callback(PackageInstaller.STATUS_SUCCESS, session = 70)
         assertEquals(BuildCoordinator.Phase.INSTALLING, BuildCoordinator.state.phase)
         assertNull(prefs("package_monitor").getString("installed_fingerprint", null))
         callback(PackageInstaller.STATUS_SUCCESS)
         assertEquals(BuildCoordinator.Phase.DONE, BuildCoordinator.state.phase)
         assertEquals("build-start-snapshot", prefs("package_monitor").getString("installed_fingerprint", null))
+    }
+
+    @Test fun ownSuccessCannotApplyAnOlderInstalledPack() {
+        operation()
+        installedPackage(PackageChangeReceiver.PACK_PACKAGE, 42)
+        callback(PackageInstaller.STATUS_SUCCESS)
+        assertEquals(BuildCoordinator.Phase.FAILED, BuildCoordinator.state.phase)
+        assertNull(IconPackInstaller.pendingReapplyVersion(context))
+        assertNull(prefs("package_monitor").getString("installed_fingerprint", null))
+    }
+
+    @Test fun confirmedSameVersionReinstallCanCompleteAndReapply() {
+        operation()
+        installedPackage(PackageChangeReceiver.PACK_PACKAGE, 43)
+        prefs("install_state").edit().putLong("previous_version", 43).commit()
+        callback(PackageInstaller.STATUS_SUCCESS)
+        assertEquals(BuildCoordinator.Phase.DONE, BuildCoordinator.state.phase)
+        assertEquals(43L, IconPackInstaller.pendingReapplyVersion(context))
+        assertTrue(IconPackInstaller.canReapplyInstalledPack(context))
+    }
+
+    @Test fun sameVersionRecoveryWaitsForOwnSessionCallbackWithoutInferringSuccess() {
+        operation()
+        installedPackage(PackageChangeReceiver.PACK_PACKAGE, 43)
+        prefs("install_state").edit().putLong("previous_version", 43).commit()
+        IconPackInstaller.restoreState(context)
+        assertEquals(BuildCoordinator.Phase.INSTALLING, BuildCoordinator.state.phase)
+        assertTrue(IconPackInstaller.hasPendingOperation(context))
+        assertNull(IconPackInstaller.pendingReapply(context))
+        callback(PackageInstaller.STATUS_SUCCESS)
+        assertEquals(BuildCoordinator.Phase.DONE, BuildCoordinator.state.phase)
+        assertEquals(43L, IconPackInstaller.pendingReapplyVersion(context))
+    }
+
+    @Test fun confirmedInstallUsesIndependentFiniteJobWithBothFeaturesOff() {
+        prefs("auto_update").edit().putBoolean("enabled", false).commit()
+        prefs("theme_refresh").edit().putBoolean("enabled", false).commit()
+        operation()
+        installedPackage(PackageChangeReceiver.PACK_PACKAGE, 43)
+        callback(PackageInstaller.STATUS_SUCCESS)
+        assertEquals(43L, IconPackInstaller.pendingReapplyVersion(context))
+        assertNotNull(context.getSystemService(JobScheduler::class.java).getPendingJob(IconPackSelectionJobService.JOB_ID))
+        assertFalse(BackgroundMonitorService.isNeeded(context))
+        assertNull(shadowOf(context as Application).nextStartedService)
+    }
+
+    @Test fun olderSelectorAcknowledgementCannotConsumeNewerSameVersionReinstall() {
+        operation()
+        installedPackage(PackageChangeReceiver.PACK_PACKAGE, 43)
+        callback(PackageInstaller.STATUS_SUCCESS)
+        val first = IconPackInstaller.pendingReapply(context)!!
+        operation(session = 72)
+        callback(PackageInstaller.STATUS_SUCCESS, session = 72)
+        val newer = IconPackInstaller.pendingReapply(context)!!
+        assertEquals(first.version, newer.version)
+        assertNotEquals(first.request, newer.request)
+        IconPackInstaller.completeReapply(context, first)
+        assertEquals(newer, IconPackInstaller.pendingReapply(context))
     }
 
     @Test fun userConfirmationIsPersistedWithoutBackgroundActivityLaunch() {
@@ -155,6 +218,7 @@ class AutomaticPipelineTest {
 
     @Test fun previousSuccessCannotOverwriteFailureOfANewerBuild() {
         operation()
+        installedPackage(PackageChangeReceiver.PACK_PACKAGE, 43)
         callback(PackageInstaller.STATUS_SUCCESS)
         assertTrue(IconPackInstaller.beginBuild(context))
         BuildCoordinator.update { it.copy(phase = BuildCoordinator.Phase.FAILED, error = "Compilation failed") }
@@ -190,6 +254,37 @@ class AutomaticPipelineTest {
         BuildCoordinator.reset()
         PackageChangeMonitor.reconcile(context)
         assertEquals(2L, prefs("build_queue").getLong("requested", 0))
+    }
+
+    @Test fun coldStartRegistrationCannotConsumeOrDuplicateAuthoritativeInstall() {
+        prefs("theme_refresh").edit().putBoolean("enabled", false).commit()
+        installedPackage()
+        PackageChangeMonitor.register(context)
+        PackageChangeMonitor.register(context)
+        change(Intent.ACTION_PACKAGE_ADDED)
+        shadowOf(Looper.getMainLooper()).idle()
+        change(Intent.ACTION_PACKAGE_ADDED) // Manifest and resident deliveries can overlap.
+        assertEquals(1L, prefs("build_queue").getLong("requested", 0))
+        assertFalse(BackgroundMonitorService.isNeeded(context))
+    }
+
+    @Test fun incompleteOnboardingConsumesEventsWithoutStartingAutomation() {
+        prefs("onboarding").edit().clear().commit()
+        PackageChangeMonitor.register(context)
+        installedPackage()
+        change(Intent.ACTION_PACKAGE_ADDED)
+        shadowOf(Looper.getMainLooper()).idle()
+        assertEquals(0L, prefs("build_queue").getLong("requested", 0))
+        assertNull(context.getSystemService(JobScheduler::class.java).getPendingJob(PackageChangeMonitor.JOB_ID))
+        assertFalse(BackgroundMonitorService.isNeeded(context))
+        OnboardingState.markComplete(context)
+        PackageChangeMonitor.register(context)
+        shadowOf(Looper.getMainLooper()).idle()
+        assertNotNull(context.getSystemService(JobScheduler::class.java).getPendingJob(PackageChangeMonitor.JOB_ID))
+        assertEquals(0L, prefs("build_queue").getLong("requested", 0))
+        installedPackage(version = 2)
+        change(Intent.ACTION_PACKAGE_ADDED)
+        assertEquals(1L, prefs("build_queue").getLong("requested", 0))
     }
 
     @Test fun removalCannotConsumeAnotherPackagesUnobservedInstall() {
@@ -266,6 +361,7 @@ class AutomaticPipelineTest {
         } finally { apk.delete() }
 
         operation()
+        installedPackage(PackageChangeReceiver.PACK_PACKAGE, 43)
         BuildCoordinator.stopAll(context)
         callback(PackageInstaller.STATUS_SUCCESS)
         assertEquals(BuildCoordinator.Phase.STOPPED, BuildCoordinator.state.phase)
@@ -294,6 +390,7 @@ class AutomaticPipelineTest {
 
     @Test fun previousSuccessCannotHideAQueuedUpdateAwaitingAndroid() {
         operation()
+        installedPackage(PackageChangeReceiver.PACK_PACKAGE, 43)
         callback(PackageInstaller.STATUS_SUCCESS)
         BuildCoordinator.start(context, "ui")
         IconPackInstaller.restoreState(context)
