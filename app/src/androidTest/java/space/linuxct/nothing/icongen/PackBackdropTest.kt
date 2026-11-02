@@ -69,7 +69,7 @@ class PackBackdropTest {
 
 /** Executes the same factory/options the launcher uses for mapped external drawables. */
 internal class NativePackRasterizer(context: Context, size: Int) : AutoCloseable {
-    private val launcher = NothingLauncherRuntime.application(context)
+    private val launcher = NativeLauncherTestRuntime.application(context)
     private val factoryClass = launcher.classLoader.loadClass("com.android.launcher3.icons.BaseIconFactory")
     private val optionsClass = launcher.classLoader.loadClass("com.android.launcher3.icons.BaseIconFactory\$IconOptions")
     private val factory = factoryClass.getConstructor(Context::class.java, Int::class.javaPrimitiveType,

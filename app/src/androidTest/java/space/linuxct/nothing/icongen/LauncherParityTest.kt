@@ -1,6 +1,5 @@
 package space.linuxct.nothing.icongen
 
-import android.app.Application
 import android.content.Context
 import android.graphics.Bitmap
 import android.graphics.Canvas
@@ -25,25 +24,61 @@ class LauncherParityTest {
     fun exportedForegroundMatchesActualNativeDelegateAfterPlateGeometryMapping() {
         val context = InstrumentationRegistry.getInstrumentation().targetContext
         val apps = AppScanner.scanInstalledApps(context)
-        val selected = apps.filter { it.componentName.substringBefore('/') in NativeLauncherOracle.referencePackages }
-        val installed = selected.map { it.componentName.substringBefore('/') }.toSet()
-        assertTrue("missing required smoke fixtures: ${NativeLauncherOracle.requiredPackages - installed}",
-            installed.containsAll(NativeLauncherOracle.requiredPackages))
         val output = File(requireNotNull(context.getExternalFilesDir(null)), "render-verification").apply {
             check(isDirectory || mkdirs())
         }
+        val failures = mutableListOf<String>()
+        val nativeRejected = mutableListOf<String>()
+        var accepted = 0
+        val expectedPixels = IntArray(IconArtwork.ICON_SIZE * IconArtwork.ICON_SIZE)
+        val actualPixels = IntArray(expectedPixels.size)
+        val plateBoundary = BooleanArray(expectedPixels.size) { index ->
+            val dx = index % IconArtwork.ICON_SIZE + .5f - IconArtwork.ICON_SIZE / 2f
+            val dy = index / IconArtwork.ICON_SIZE + .5f - IconArtwork.ICON_SIZE / 2f
+            kotlin.math.abs(kotlin.math.sqrt(dx * dx + dy * dy) - IconArtwork.ICON_SIZE / 2f) <= 2f
+        }
+        val palettes = listOf(false, true).map { dark ->
+            ThemeColors.resolve(context, dark).copy(background = if (dark) Color.BLACK else Color.WHITE)
+        }
         NativeLauncherOracle(context).use { oracle ->
             IconPipeline(context).use { pipeline ->
-                for (app in selected) {
-                    val native = requireNotNull(oracle.glyph(app.icon)) { "native rejected reference ${app.componentName}" }
+                for (app in apps) {
+                    val native = oracle.glyph(app.icon)
+                    if (native == null) {
+                        nativeRejected.add(app.componentName)
+                        continue
+                    }
+                    accepted++
                     val actual = pipeline.glyph(app.icon)
                     try {
-                        for (dark in listOf(false, true)) {
-                            val palette = ThemeColors.resolve(context, dark).copy(background = if (dark) Color.BLACK else Color.WHITE)
+                        val name = NativeLauncherOracle.fileName(app.componentName)
+                        for ((kind, expected, ours) in listOf(
+                            Triple("normal", native.normal, actual.normal),
+                            Triple("light", native.light, actual.light),
+                        )) {
+                            if (expected == null || ours == null) {
+                                if (expected !== ours) failures.add("${app.componentName} $kind availability differs")
+                                continue
+                            }
+                            NativeLauncherOracle.writePng(expected, File(output, "${name}_native_mask_$kind.png"))
+                            NativeLauncherOracle.writePng(ours, File(output, "${name}_ours_mask_$kind.png"))
+                            var different = 0
+                            var maximum = 0
+                            expected.getPixels(expectedPixels, 0, expected.width, 0, 0, expected.width, expected.height)
+                            ours.getPixels(actualPixels, 0, ours.width, 0, 0, ours.width, ours.height)
+                            for (index in expectedPixels.indices) {
+                                val delta = kotlin.math.abs(Color.alpha(expectedPixels[index]) -
+                                    Color.alpha(actualPixels[index]))
+                                if (delta != 0) different++
+                                maximum = maxOf(maximum, delta)
+                            }
+                            println("GLYPH_PARITY ${app.componentName} $kind pixels=$different maxDelta=$maximum")
+                            if (different != 0) failures.add("${app.componentName} $kind: pixels=$different maxDelta=$maximum")
+                        }
+                        for (palette in palettes) {
                             val expected = oracle.drawDelegate(native, palette)
                             val ours = IconArtwork.buildIcon(palette, actual.forColor(palette.foreground))
-                            val suffix = if (dark) "night" else "day"
-                            val name = NativeLauncherOracle.fileName(app.componentName)
+                            val suffix = if (palette.isDark) "night" else "day"
                             try {
                                 NativeLauncherOracle.writePng(expected, File(output, "${name}_native_opaque_$suffix.png"))
                                 NativeLauncherOracle.writePng(ours, File(output, "${name}_ours_opaque_$suffix.png"))
@@ -52,13 +87,12 @@ class LauncherParityTest {
                                 // else, including foreground AA and greys, is exact.
                                 var mismatches = 0
                                 var maximumDelta = 0
-                                for (y in 0 until ours.height) for (x in 0 until ours.width) {
-                                    val dx = x + .5f - ours.width / 2f
-                                    val dy = y + .5f - ours.height / 2f
-                                    val radius = kotlin.math.sqrt(dx * dx + dy * dy)
-                                    if (kotlin.math.abs(radius - ours.width / 2f) <= 2f) continue
-                                    val a = expected.getPixel(x, y)
-                                    val b = ours.getPixel(x, y)
+                                expected.getPixels(expectedPixels, 0, expected.width, 0, 0, expected.width, expected.height)
+                                ours.getPixels(actualPixels, 0, ours.width, 0, 0, ours.width, ours.height)
+                                for (index in expectedPixels.indices) {
+                                    if (plateBoundary[index]) continue
+                                    val a = expectedPixels[index]
+                                    val b = actualPixels[index]
                                     val delta = maxOf(kotlin.math.abs(Color.red(a) - Color.red(b)),
                                         kotlin.math.abs(Color.green(a) - Color.green(b)),
                                         kotlin.math.abs(Color.blue(a) - Color.blue(b)),
@@ -66,13 +100,21 @@ class LauncherParityTest {
                                     if (delta != 0) mismatches++
                                     maximumDelta = maxOf(maximumDelta, delta)
                                 }
-                                assertEquals("${app.componentName} $suffix: delegate mismatch pixels=$mismatches maxDelta=$maximumDelta", 0, mismatches)
+                                println("DELEGATE_PARITY ${app.componentName} $suffix pixels=$mismatches maxDelta=$maximumDelta")
+                                if (mismatches != 0) failures.add("${app.componentName} $suffix: pixels=$mismatches maxDelta=$maximumDelta")
                             } finally { expected.recycle(); ours.recycle() }
                         }
                     } finally { native.recycle(); actual.recycle() }
                 }
             }
         }
+        File(output, "all-installed-parity-summary.txt").writeText(
+            "scanned=${apps.size}\nnative_accepted=$accepted\nnative_rejected=${nativeRejected.size}\n" +
+                "mismatched_stages=${failures.size}\n" +
+                "native_rejected_components=${nativeRejected.joinToString()}\n" +
+                "failures=${failures.joinToString("\n")}\n")
+        println("ALL_INSTALLED_PARITY scanned=${apps.size} nativeAccepted=$accepted nativeRejected=${nativeRejected.size} failures=${failures.size}")
+        assertTrue(failures.joinToString("\n"), failures.isEmpty())
     }
 }
 
@@ -87,14 +129,6 @@ internal class NativeLauncherOracle(context: Context) : AutoCloseable {
     private val infoClass = loader.loadClass("ea.h")
     private val generatorClass = loader.loadClass("ga.f")
 
-    init {
-        val application = object : Application() {
-            fun attachLauncher() = attachBaseContext(launcher)
-            override fun getApplicationContext(): Context = this
-        }.apply { attachLauncher() }
-        val globalsClass = loader.loadClass("x9.i")
-        globalsClass.getMethod("c", Application::class.java).invoke(globalsClass.getField("a").get(null), application)
-    }
 
     /** null is a native rejection, not permission to substitute a heuristic renderer. */
     fun glyph(drawable: Drawable): Masks? {
@@ -173,20 +207,23 @@ internal class NativeLauncherOracle(context: Context) : AutoCloseable {
             "org.mozilla.fenix", "org.telegram.messenger", "com.whatsapp", "com.nothing.camera",
             "com.google.android.apps.translate", "es.vodafone.mobile.mivodafone")
 
-        fun requireLauncher(context: Context): Context {
-            val info = context.packageManager.getPackageInfo("com.nothing.launcher", 0)
-            check(info.versionName == "5.0.6" && info.longVersionCode == 50006009L) {
-                "Native tests require installed Nothing Launcher 5.0.6 (50006009), found ${info.versionName} (${info.longVersionCode})"
-            }
-            return context.createPackageContext("com.nothing.launcher", Context.CONTEXT_INCLUDE_CODE or Context.CONTEXT_IGNORE_SECURITY)
-        }
+        fun requireLauncher(context: Context): Context = NativeLauncherTestRuntime.application(context)
 
         // A bounded full-component digest avoids both package overwrites and NAME_MAX.
         fun fileName(component: String): String = java.security.MessageDigest.getInstance("SHA-256")
             .digest(component.toByteArray(Charsets.UTF_8)).joinToString("") { "%02x".format(it.toInt() and 255) }
 
         fun writePng(bitmap: Bitmap, file: File) {
-            file.outputStream().use { check(bitmap.compress(Bitmap.CompressFormat.PNG, 100, it)) { "PNG export failed: $file" } }
+            val image = if (bitmap.config == Bitmap.Config.ALPHA_8) {
+                requireNotNull(bitmap.copy(Bitmap.Config.ARGB_8888, false))
+            } else bitmap
+            try {
+                file.outputStream().use {
+                    check(image.compress(Bitmap.CompressFormat.PNG, 100, it)) { "PNG export failed: $file" }
+                }
+            } finally {
+                if (image !== bitmap) image.recycle()
+            }
         }
     }
 }

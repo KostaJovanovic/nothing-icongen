@@ -16,7 +16,7 @@ Create and install Nothing OS 5.0-style translucent icons on your phone. Making 
 ### Requirements
 
 - A Nothing phone running **Android 17 (API 37), arm64**.
-- **Nothing Launcher 5.0.6 (50006009)**.
+- **Nothing Launcher 5.0 or newer**.
 - A PC with `adb` for the first app installation. Enable USB debugging and authorize the PC.
 
 Download `IconGen.apk` from [Releases](https://github.com/linuxct/nothing-icongen/releases). Each push publishes a signed build.

@@ -28,13 +28,13 @@ object IconArtwork {
     fun buildIcon(palette: ThemeColors.Palette, glyph: Bitmap): Bitmap {
         val out = buildPlate(palette)
         val canvas = Canvas(out)
-        canvas.clipPath(Path().apply {
-            addCircle(ICON_SIZE / 2f, ICON_SIZE / 2f, ICON_SIZE / 2f, Path.Direction.CW)
-        })
         canvas.scale(
             1f / NATIVE_BACKGROUND_SCALE, 1f / NATIVE_BACKGROUND_SCALE,
             ICON_SIZE / 2f, ICON_SIZE / 2f,
         )
+        canvas.clipPath(Path().apply {
+            addCircle(ICON_SIZE / 2f, ICON_SIZE / 2f, ICON_SIZE / 2f, Path.Direction.CW)
+        })
         canvas.drawBitmap(glyph, null, android.graphics.Rect(0, 0, ICON_SIZE, ICON_SIZE),
             Paint(Paint.ANTI_ALIAS_FLAG or Paint.FILTER_BITMAP_FLAG).apply {
                 colorFilter = PorterDuffColorFilter(palette.foreground, PorterDuff.Mode.SRC_IN)

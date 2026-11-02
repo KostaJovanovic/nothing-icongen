@@ -124,7 +124,7 @@ class MainActivity : AppCompatActivity() {
 
     private fun createHome() {
         val root = ui.screen(this)
-        ui.header(root, "IconGen", "Making your apps a bit more Lucent!", menu = ::showMoreOptions)
+        ui.header(root, "Nothing IconGen", "Making your apps a bit more Lucent!", menu = ::showMoreOptions)
         val main = ui.card()
         ui.add(main, ui.text("ICON PACK", 11f, muted = true))
         tvStatus = ui.text("Ready to create", 18f)
@@ -503,13 +503,8 @@ class MainActivity : AppCompatActivity() {
 
 
     private fun selectInLauncherSettings() {
-        val intent = Intent().apply {
-            setComponent(
-                android.content.ComponentName(
-                    "com.nothing.launcher",
-                    "com.nothing.launcher.setting.iconpack.IconPackPickerActivity",
-                ),
-            )
+        val intent = Intent("com.nothing.launcher.icon_pack_picker").apply {
+            setPackage("com.nothing.launcher")
             addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
         }
         try {
