@@ -14,7 +14,9 @@ Create and install `IconGen Nothing Translucent Icon Pack` on your phone.
 - **Nothing Launcher 5.0.6 (50006009)**.
 - A PC with `adb` for the first app installation. Enable USB debugging and authorize the PC.
 
-Install the app APK with the low-target bypass (the app targets SDK 22):
+Download `IconGen.apk` from [Releases](https://github.com/linuxct/nothing-icongen/releases). Each push publishes a signed build.
+
+Install it with the low-target bypass (the app targets SDK 22):
 
 ```sh
 adb install -r --bypass-low-target-sdk-block IconGen.apk
