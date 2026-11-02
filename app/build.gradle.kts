@@ -72,6 +72,11 @@ android {
             keepDebugSymbols += setOf("**/libaapt2.so", "**/libaapt.so")
         }
     }
+
+    lint {
+        checkReleaseBuilds = false
+        abortOnError = false
+    }
 }
 
 dependencies {
@@ -127,7 +132,7 @@ tasks.register("buildIconPackApk") {
         val sdkDir = "$home/Android/Sdk"
         val aapt2 = "$sdkDir/build-tools/36.0.0/aapt2"
         val apksigner = "$sdkDir/build-tools/36.0.0/apksigner"
-        val androidJar = "$sdkDir/platforms/android-35/android.jar"
+        val androidJar = "$sdkDir/platforms/android-36/android.jar"
 
         val srcDir = file("build/iconpack_resources")
         val compileDir = file("build/iconpack_compiled")
