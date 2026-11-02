@@ -70,6 +70,7 @@ jobs:
 
       - name: Test and build release APK
         env:
+          CI_VERSION_CODE: ${{ steps.version.outputs.version_code }}
           CI_VERSION_NAME: ${{ steps.version.outputs.version_name }}
         run: ./gradlew --no-daemon testDebugUnitTest :app:packageRelease
 

@@ -14,20 +14,11 @@ android {
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
-        // VersionCode: monotonically increasing integer (set by CI from release tags)
-        // VersionName: semver with build number (e.g. "1.0.0.5" for 5th build of 1.0.0)
-        val versionCodeFile = file("VERSION_CODE")
-        versionCode = if (versionCodeFile.exists()) {
-            versionCodeFile.readText().trim().toIntOrNull() ?: 1
-        } else {
-            1
-        }
-        versionName = try {
-            val v = System.getenv("CI_VERSION_NAME") ?: "1.0.0.2"
-            v
-        } catch (_: Exception) {
-            "1.0.0.2"
-        }
+        // VersionCode: set by CI via CI_VERSION_CODE env (monotonically increasing)
+        val envVersionCode = System.getenv("CI_VERSION_CODE")?.toIntOrNull()
+        versionCode = envVersionCode ?: 1
+        // VersionName: set by CI via CI_VERSION_NAME env (e.g. "1.0.0.5")
+        versionName = System.getenv("CI_VERSION_NAME") ?: "1.0.0.1"
     }
 
     buildTypes {
