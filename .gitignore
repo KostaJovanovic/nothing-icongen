@@ -37,4 +37,7 @@ captures/
 keystore.properties
 signing.properties
 
+# Private icon fixtures must not be reintroduced.
+/app/src/test/resources/icons/*.png
+
 # Required JARs, native libraries, assets, and any future wrapper JAR stay tracked.
