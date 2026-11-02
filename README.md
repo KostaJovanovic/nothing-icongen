@@ -7,7 +7,7 @@ Create and install Nothing OS 5.0-style translucent icons on your phone. Making 
 
 | IconGen app | Light theme | Dark theme |
 |:---:|:---:|:---:|
-| <a href="screenshots/app-ui-2.png"><img src="screenshots/app-ui.png" alt="IconGen app" width="230"></a> | <a href="screenshots/light-theme.png"><img src="screenshots/light-theme.png" alt="Icon pack in light theme" width="230"></a> | <a href="screenshots/dark-theme.png"><img src="screenshots/dark-theme.png" alt="Icon pack in dark theme" width="230"></a> |
+| <a href="screenshots/app-ui-2.png"><img src="screenshots/app-ui-2.png" alt="IconGen app" width="230"></a> | <a href="screenshots/light-theme.png"><img src="screenshots/light-theme.png" alt="Icon pack in light theme" width="230"></a> | <a href="screenshots/dark-theme.png"><img src="screenshots/dark-theme.png" alt="Icon pack in dark theme" width="230"></a> |
 
 ## **ADB INSTALLATION IS MANDATORY**
 
