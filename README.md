@@ -2,13 +2,17 @@
 
 Create and install `IconGen Nothing Translucent Icon Pack` on your phone.
 
-<p>
-  <img src="screenshots/app-ui.png" alt="IconGen app" width="320">
-  <img src="screenshots/light-theme.png" alt="Icon pack in light theme" width="320">
-  <img src="screenshots/dark-theme.png" alt="Icon pack in dark theme" width="320">
-</p>
+## Screenshots
 
-## Requirements
+| IconGen app | Light theme | Dark theme |
+|:---:|:---:|:---:|
+| <a href="screenshots/app-ui.png"><img src="screenshots/app-ui.png" alt="IconGen app" width="230"></a> | <a href="screenshots/light-theme.png"><img src="screenshots/light-theme.png" alt="Icon pack in light theme" width="230"></a> | <a href="screenshots/dark-theme.png"><img src="screenshots/dark-theme.png" alt="Icon pack in dark theme" width="230"></a> |
+
+## **ADB INSTALLATION IS MANDATORY**
+
+**You cannot install this APK by downloading it on your phone and tapping Install. Android will reject it with an installation error. You MUST use a PC with ADB and the `--bypass-low-target-sdk-block` option shown below.**
+
+### Requirements
 
 - A Nothing phone running **Android 17 (API 37), arm64**.
 - **Nothing Launcher 5.0.6 (50006009)**.
