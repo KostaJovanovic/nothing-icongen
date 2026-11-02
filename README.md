@@ -1,6 +1,7 @@
 # IconGen: Translucent Nothing Icon Generator
 
-Create and install Nothing OS 5.0-style translucent icons on your phone.
+Create and install Nothing OS 5.0-style translucent icons on your phone. Making your apps a bit more Lucent!
+
 
 ## Screenshots
 
