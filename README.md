@@ -33,6 +33,8 @@ adb install -r --bypass-low-target-sdk-block IconGen.apk
 2. Tap **Create icon pack** (or **Update icon pack**). Approve installation if Android asks.
 3. Open **⋮ → Choose in launcher** and select **IconGen Nothing Translucent Icon Pack** once.
 
+After updating IconGen, update the pack once. Generated artwork is mapped to launcher activities; package-level system icons keep their original artwork.
+
 The automation switches control app updates, theme changes, and optional notifications. App updates rebuild, install, and apply the pack. Theme changes refresh it without rebuilding.
 
 Applying updated icons and theme refresh need Settings access. Choose PC or wireless setup.

@@ -40,15 +40,35 @@ class PackAssemblyTest {
                 val appfilter = requireNotNull(zip.getEntry("res/xml/appfilter.xml"))
                 val xml = zip.getInputStream(appfilter).bufferedReader().use { it.readText() }
                 val parser = android.util.Xml.newPullParser().apply { setInput(xml.reader()) }
+                val packageDefaults = linkedMapOf<String, String>()
                 val mappings = linkedMapOf<String, String>()
+                val components = mutableSetOf<String>()
                 while (parser.eventType != org.xmlpull.v1.XmlPullParser.END_DOCUMENT) {
                     if (parser.eventType == org.xmlpull.v1.XmlPullParser.START_TAG && parser.name == "item") {
                         val component = parser.getAttributeValue(null, "component")
                         val drawable = parser.getAttributeValue(null, "drawable")
-                        if (component != null && drawable != null) mappings[component] = drawable
+                        requireNotNull(component) { "item without component" }
+                        requireNotNull(drawable) { "item without drawable" }
+                        assertTrue("duplicate mapping: $component", components.add(component))
+                        val flattened = component.removePrefix("ComponentInfo{").removeSuffix("}")
+                        val name = android.content.ComponentName(
+                            flattened.substringBefore('/'), flattened.substringAfter('/'))
+                        if (name.className.isEmpty()) {
+                            assertEquals("package default must suppress system replacement", "", drawable)
+                            assertTrue("package default follows an activity: $component",
+                                mappings.keys.none { it.startsWith("ComponentInfo{${name.packageName}/") })
+                            packageDefaults[name.packageName] = drawable
+                        } else {
+                            assertTrue("activity lacks preceding package default: $component",
+                                packageDefaults.containsKey(name.packageName))
+                            assertTrue("activity drawable must not be empty: $component", drawable.isNotEmpty())
+                            mappings[component] = drawable
+                        }
                     }
                     parser.next()
                 }
+                assertEquals("one empty default per package",
+                    entries.map { it.componentName.substringBefore('/') }.toSet(), packageDefaults.keys)
                 assertEquals("one mapping per activity", entries.size, mappings.size)
                 assertEquals("same-package activities overwrote one another", entries.size, mappings.values.toSet().size)
                 for (entry in entries) {

@@ -270,7 +270,16 @@ object IconPackAssembler {
     <!-- The background plate also covers icons without an explicit mapping. -->
     <iconback img1="icon_background" />
 """)
+        val packages = HashSet<String>()
         for (entry in entries) {
+            val packageName = entry.componentName.substringBefore('/')
+            if (packages.add(packageName)) {
+                // Empty package defaults opt out of package-wide theming; exact activity
+                // overrides below still resolve to their generated launcher drawables.
+                appfilterXml.append(
+                    "    <item component=\"ComponentInfo{$packageName/}\" drawable=\"\" />\n",
+                )
+            }
             val drawableName = packDrawableName(entry.componentName)
             appfilterXml.append(
                 "    <item component=\"ComponentInfo{${entry.componentName}}\" drawable=\"$drawableName\" />\n",
