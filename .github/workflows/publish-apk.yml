@@ -22,19 +22,27 @@ jobs:
         with:
           persist-credentials: false
 
-      - name: Compute version
+      - name: Compute version from latest release
         id: version
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          VERSION_CODE_FILE="VERSION_CODE"
-          if [ ! -f "$VERSION_CODE_FILE" ]; then
-            echo "1" > "$VERSION_CODE_FILE"
-          fi
-          VERSION_CODE=$(cat "$VERSION_CODE_FILE")
+          TAG_NAME="${{ github.ref_name }}"
+
+          # Parse version code from latest release tag (build-1.0.0.N-...)
+          # If no releases exist, start at 2
+          VERSION_CODE=$(gh release list --limit 50 --json tagName --jq '.[].tagName' 2>/dev/null \
+            | grep '^build-1\.0\.0\.' \
+            | sed 's/^build-1\.0\.0\.//;s/-.*$//' \
+            | sort -n \
+            | tail -n 1 \
+            || echo 1)
+
           VERSION_CODE=$((VERSION_CODE + 1))
-          echo "$VERSION_CODE" > "$VERSION_CODE_FILE"
           EPOCH=$(date +%s)
           VERSION_NAME="1.0.0.${VERSION_CODE}"
           TAG_NAME="build-${VERSION_NAME}-${VERSION_CODE}.${EPOCH}"
+
           echo "version_code=${VERSION_CODE}" >> "$GITHUB_OUTPUT"
           echo "version_name=${VERSION_NAME}" >> "$GITHUB_OUTPUT"
           echo "tag_name=${TAG_NAME}" >> "$GITHUB_OUTPUT"

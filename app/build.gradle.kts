@@ -14,8 +14,8 @@ android {
 
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
-        // VersionCode: monotonically increasing integer (CI increments via ENV)
-        // VersionName: semver with build number (e.g. "1.0.0.1" for 1st build of 1.0.0)
+        // VersionCode: monotonically increasing integer (set by CI from release tags)
+        // VersionName: semver with build number (e.g. "1.0.0.5" for 5th build of 1.0.0)
         val versionCodeFile = file("VERSION_CODE")
         versionCode = if (versionCodeFile.exists()) {
             versionCodeFile.readText().trim().toIntOrNull() ?: 1
@@ -23,10 +23,10 @@ android {
             1
         }
         versionName = try {
-            val v = System.getenv("CI_VERSION_NAME") ?: "1.0.0"
+            val v = System.getenv("CI_VERSION_NAME") ?: "1.0.0.2"
             v
         } catch (_: Exception) {
-            "1.0.0"
+            "1.0.0.2"
         }
     }
 
