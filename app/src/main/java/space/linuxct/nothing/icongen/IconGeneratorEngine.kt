@@ -3,6 +3,7 @@ package space.linuxct.nothing.icongen
 import android.content.Context
 import android.util.Log
 import java.io.File
+import java.util.concurrent.CancellationException
 
 /** Generates mapped monochrome PNG resources. */
 object IconGeneratorEngine {
@@ -28,15 +29,19 @@ object IconGeneratorEngine {
                         )
                     }
                     Log.d(TAG, "Rendering ${app.componentName}")
-                    val glyphs = try {
-                        pipeline.glyph(app.icon)
+                    try {
+                        val glyphs = pipeline.glyph(app.icon)
+                        entries.add(IconPackAssembler.PackEntry(app.componentName, app.label, glyphs))
                     } catch (e: Exception) {
-                        throw IllegalStateException("Nothing renderer failed for ${app.componentName}", e)
+                        if (e is CancellationException) throw e
+                        // One unrenderable icon must not block the pack; the app stays unmapped (iconback plate).
+                        Log.w(TAG, "Skipping ${app.componentName}: Nothing renderer failed", e)
                     }
-                    entries.add(IconPackAssembler.PackEntry(app.componentName, app.label, glyphs))
                     cancellation.checkpoint()
                 }
             }
+            check(entries.isNotEmpty()) { "Nothing renderer failed for all ${apps.size} apps" }
+            if (entries.size < apps.size) Log.w(TAG, "Skipped ${apps.size - entries.size} of ${apps.size} apps")
             cancellation.checkpoint()
             return IconPackAssembler.assembleZip(context, outputDir, entries, palette, cancellation)
         } finally {

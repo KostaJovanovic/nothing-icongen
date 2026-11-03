@@ -21,6 +21,7 @@ object IconPackBuildService {
     private const val RESULT_ID = 43
     private const val THEME_ACCESS_ID = 44
     private const val NOTIFICATION_TIMEOUT_MS = 60_000L
+    private const val BUILD_DIR_PREFIX = "autobuild_"
 
     enum class ResultKind { SUCCESS, ERROR, ACTION_REQUIRED }
 
@@ -36,11 +37,15 @@ object IconPackBuildService {
             updateProgress(context, state)
         }
         BuildCoordinator.addListener(observer)
+        val outputRoot = context.getExternalFilesDir(null) ?: context.filesDir
+        // Builds are serialized, so any existing build folder is a leftover from an earlier run.
+        outputRoot.listFiles { file -> file.name.startsWith(BUILD_DIR_PREFIX) }?.forEach { it.deleteRecursively() }
+        val outputDir = File(outputRoot, "$BUILD_DIR_PREFIX${System.currentTimeMillis()}")
         try {
-            val outputRoot = context.getExternalFilesDir(null) ?: context.filesDir
+            // The resource ZIP is written beside outputDir, so it survives the cleanup below.
             val zip = IconGeneratorEngine.generate(
                 context = context.applicationContext,
-                outputDir = File(outputRoot, "autobuild_${System.currentTimeMillis()}"),
+                outputDir = outputDir,
                 maxApps = 2000,
                 cancellation = cancellation,
             )
@@ -50,6 +55,7 @@ object IconPackBuildService {
             cancellation.checkpoint()
             return IconPackAssembler.compileApk(context.applicationContext, zip, cancellation)
         } finally {
+            outputDir.deleteRecursively()
             BuildCoordinator.removeListener(observer)
             cancelProgress(context)
         }
