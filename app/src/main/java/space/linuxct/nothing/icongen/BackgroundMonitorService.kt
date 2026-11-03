@@ -3,6 +3,7 @@ package space.linuxct.nothing.icongen
 import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
+import android.app.KeyguardManager
 import android.app.Service
 import android.content.BroadcastReceiver
 import android.content.Context
@@ -14,6 +15,7 @@ import android.database.ContentObserver
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.os.PowerManager
 import android.os.SystemClock
 import android.provider.Settings
 import android.util.Log
@@ -171,6 +173,14 @@ class BackgroundMonitorService : Service() {
                 when (intent.action) {
                     ACTION_NIGHT_MODE_CHANGED -> requestRefresh("night mode broadcast")
                     Intent.ACTION_CONFIGURATION_CHANGED -> checkNightMode(resources.configuration)
+                    Intent.ACTION_SCREEN_OFF -> {
+                        // A selector cycle already in flight may finish against stale launcher resources.
+                        if (busy) requestRefresh("screen turned off during theme refresh") else armRefresh()
+                    }
+                    Intent.ACTION_SCREEN_ON, Intent.ACTION_USER_PRESENT -> {
+                        checkNightMode(resources.configuration)
+                        armRefresh()
+                    }
                 }
             }
         }
@@ -179,6 +189,9 @@ class BackgroundMonitorService : Service() {
             registerReceiver(listener, IntentFilter().apply {
                 addAction(ACTION_NIGHT_MODE_CHANGED)
                 addAction(Intent.ACTION_CONFIGURATION_CHANGED)
+                addAction(Intent.ACTION_SCREEN_OFF)
+                addAction(Intent.ACTION_SCREEN_ON)
+                addAction(Intent.ACTION_USER_PRESENT)
             }, Context.RECEIVER_EXPORTED)
         } catch (e: Exception) { fail("Could not register theme broadcasts", e) }
     }
@@ -194,10 +207,21 @@ class BackgroundMonitorService : Service() {
         armRefresh()
     }
 
+    private fun canRefreshTheme(): Boolean =
+        getSystemService(PowerManager::class.java).isInteractive &&
+            !getSystemService(KeyguardManager::class.java).isKeyguardLocked
+
     private fun armRefresh() {
         handler.removeCallbacks(refreshRunnable)
         if (destroying || busy) return
         val due = schedule.nextAt() ?: return
+        // Nothing Launcher can acknowledge selector changes while asleep but retain day/night artwork.
+        // Leave the request unconsumed until its configuration can catch up after wake/unlock.
+        if (!canRefreshTheme()) {
+            ThemeRefreshController.recordStatus(this, "Theme refresh waiting for screen unlock")
+            updateNotification(R.drawable.ic_notification_waiting, ThemeRefreshController.status(this))
+            return
+        }
         handler.postDelayed(refreshRunnable, (due - SystemClock.elapsedRealtime()).coerceAtLeast(0L))
     }
 
@@ -206,6 +230,10 @@ class BackgroundMonitorService : Service() {
         if (!isNeeded(this)) {
             stopMonitoring()
             stopSelf()
+            return
+        }
+        if (!canRefreshTheme()) {
+            armRefresh()
             return
         }
         if (!schedule.take(SystemClock.elapsedRealtime())) {
@@ -218,13 +246,14 @@ class BackgroundMonitorService : Service() {
             var succeeded = false
             try {
                 succeeded = IconPackSelector.shared.apply(applicationContext,
-                    themeRequested = true, cancelled = { destroying })
+                    themeRequested = true, cancelled = { destroying || !canRefreshTheme() })
             } catch (e: Exception) {
                 fail("Could not finish theme refresh", e)
             } finally {
                 handler.post {
                     busy = false
                     if (!destroying && isNeeded(this)) {
+                        if (!canRefreshTheme()) schedule.request(SystemClock.elapsedRealtime())
                         updateNotification(if (succeeded) R.drawable.ic_notification_success else R.drawable.ic_notification_waiting,
                             ThemeRefreshController.status(this))
                         armRefresh()
