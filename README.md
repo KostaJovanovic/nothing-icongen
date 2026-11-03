@@ -9,23 +9,41 @@ Create and install Nothing OS 5.0-style translucent icons on your phone. Making 
 |:---:|:---:|:---:|
 | <a href="screenshots/app-ui-2.png"><img src="screenshots/app-ui-2.png" alt="IconGen app" width="230"></a> | <a href="screenshots/light-theme.png"><img src="screenshots/light-theme.png" alt="Icon pack in light theme" width="230"></a> | <a href="screenshots/dark-theme.png"><img src="screenshots/dark-theme.png" alt="Icon pack in dark theme" width="230"></a> |
 
-## **ADB INSTALLATION IS MANDATORY**
+## Install IconGen: two supported methods
 
-**You cannot install this APK by downloading it on your phone and tapping Install. Android will reject it with an installation error. You MUST use a PC with ADB and the `--bypass-low-target-sdk-block` option shown below.**
+**You must use either a PC with ADB or InstallerX Revived on the phone with Shizuku.** IconGen targets SDK 22, so Android blocks installation through the normal system installer. Simply downloading `IconGen.apk` and tapping the stock **Install** button will not work.
 
 ### Requirements
 
 - A Nothing phone running **Android 17 (API 37), arm64**.
 - **Nothing Launcher 5.0 or newer**.
-- A PC with `adb` for the first app installation. Enable USB debugging and authorize the PC.
+- For **Method 1**, a PC with `adb`. For **Method 2**, InstallerX Revived and Shizuku on the phone, plus Wi-Fi for wireless debugging.
 
 Download `IconGen.apk` from [Releases](https://github.com/linuxct/nothing-icongen/releases). Each push publishes a signed build.
+
+### Method 1: PC with ADB
+
+Enable USB debugging, connect the phone to your PC, and authorize the PC when Android asks.
 
 Install it with the low-target bypass (the app targets SDK 22):
 
 ```sh
 adb install -r --bypass-low-target-sdk-block IconGen.apk
 ```
+
+### Method 2: on the phone with InstallerX Revived and Shizuku
+
+This alternative needs **no PC and no root**, but it still requires privileged installation through Shizuku. Installing InstallerX Revived alone is not enough.
+
+1. Install [Shizuku](https://shizuku.rikka.app/download/) and the [latest stable InstallerX Revived APK](https://github.com/wxxsfxyzm/InstallerX-Revived/releases/latest). Allow installation from your browser/file manager if Android asks when installing these helper apps.
+2. Connect to trusted Wi-Fi and enable **Developer options → USB debugging** and **Wireless debugging**.
+3. In Shizuku, use **Start via Wireless debugging → Pairing**. Open Android's **Wireless debugging → Pair device with pairing code**, then enter the code through Shizuku's pairing notification. Return to Shizuku and tap **Start**. Confirm that Shizuku is running. See its [wireless-start guide](https://shizuku.rikka.app/guide/setup/#start-via-wireless-debugging) for details.
+4. Open InstallerX Revived. On **Home**, select **Shizuku** as the authorizer, and grant InstallerX permission when Shizuku asks. Allow file access if prompted.
+5. Under **Profiles**, edit the default profile. Select **Shizuku** as its authorizer (or **Follow global** with Shizuku selected on Home), choose **Dialog** install mode, and enable **Install Options → Bypass Low Target SDK Block**. Save the profile. If your browser/file manager already has a scoped profile, configure that matching profile instead.
+6. Open the downloaded `IconGen.apk` **with InstallerX Revived**, not Android's stock installer. Confirm the install in InstallerX. If it reports `INSTALL_FAILED_DEPRECATED_SDK_VERSION`, check that the profile actually used has **Bypass Low Target SDK Block** enabled and that Shizuku is still running and authorized.
+7. Open IconGen and complete its setup. For an entirely on-phone setup, follow [Settings access: wireless](#settings-access-wireless) below. **InstallerX/Shizuku installation does not replace IconGen's own Settings-access setup.**
+
+Shizuku's wireless-start service must be started again after a reboot before using this installation method again. IconGen does not need Shizuku to remain running after installation and its own setup are complete. Once finished, turn Wireless debugging off; enable it again when needed.
 
 ## Create your pack
 
