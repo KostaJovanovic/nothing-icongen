@@ -2,6 +2,7 @@ package space.linuxct.nothing.icongen
 
 import android.app.job.JobParameters
 import android.app.job.JobService
+import android.content.Context
 import android.util.Log
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.Executors
@@ -61,5 +62,9 @@ class IconPackBuildJobService : JobService() {
         // A stopped job can be redelivered before its CPU-bound generation returns.
         // One process-wide executor serializes both redeliveries and periodic reconciliation.
         private val worker = Executors.newSingleThreadExecutor()
+
+        /** Runs on the build worker so the sweep can never delete a running build's folder. */
+        fun deleteStaleBuildFolders(context: Context) =
+            worker.execute { IconPackBuildService.deleteStaleBuildFolders(context.applicationContext) }
     }
 }

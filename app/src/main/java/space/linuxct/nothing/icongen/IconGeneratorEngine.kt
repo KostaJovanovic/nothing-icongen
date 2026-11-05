@@ -3,13 +3,15 @@ package space.linuxct.nothing.icongen
 import android.content.Context
 import android.util.Log
 import java.io.File
+import java.util.concurrent.CancellationException
 
 /** Generates mapped monochrome PNG resources. */
 object IconGeneratorEngine {
     private const val TAG = "IconGeneratorEngine"
 
     fun generate(context: Context, outputDir: File, maxApps: Int = 2000,
-                 cancellation: BuildCoordinator.Cancellation = BuildCoordinator.cancellation(context)): File {
+                 cancellation: BuildCoordinator.Cancellation = BuildCoordinator.cancellation(context),
+                 renderFailures: MutableList<Pair<String, Exception>> = ArrayList()): File {
         cancellation.checkpoint()
         ThemeColors.invalidate()
         val palette = ThemeColors.resolve(context)
@@ -28,15 +30,20 @@ object IconGeneratorEngine {
                         )
                     }
                     Log.d(TAG, "Rendering ${app.componentName}")
-                    val glyphs = try {
-                        pipeline.glyph(app.icon)
+                    try {
+                        val glyphs = pipeline.glyph(app.icon)
+                        entries.add(IconPackAssembler.PackEntry(app.componentName, app.label, glyphs))
                     } catch (e: Exception) {
-                        throw IllegalStateException("Nothing renderer failed for ${app.componentName}", e)
+                        if (e is CancellationException) throw e
+                        // One unrenderable icon must not block the pack; the app stays unmapped (iconback plate).
+                        Log.w(TAG, "Skipping ${app.componentName}: Nothing renderer failed", e)
+                        renderFailures.add(app.componentName to e)
                     }
-                    entries.add(IconPackAssembler.PackEntry(app.componentName, app.label, glyphs))
                     cancellation.checkpoint()
                 }
             }
+            check(entries.isNotEmpty()) { "Nothing renderer failed for all ${apps.size} apps" }
+            if (entries.size < apps.size) Log.w(TAG, "Skipped ${apps.size - entries.size} of ${apps.size} apps")
             cancellation.checkpoint()
             return IconPackAssembler.assembleZip(context, outputDir, entries, palette, cancellation)
         } finally {
