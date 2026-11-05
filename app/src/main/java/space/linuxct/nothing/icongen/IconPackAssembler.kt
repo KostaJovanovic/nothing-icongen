@@ -33,7 +33,7 @@ object IconPackAssembler {
     private const val MIN_SDK = 33
     private const val TARGET_SDK = 37
     internal const val PACKAGE_NAME = "com.nothing.icongen.pack"
-    private const val COMPILE_DIR_PREFIX = "apk_compile_"
+    const val COMPILE_DIR_PREFIX = "apk_compile_"
 
     data class PackEntry(
         val componentName: String,
@@ -109,8 +109,6 @@ object IconPackAssembler {
         cancellation.checkpoint()
         Log.d(TAG, "Compiling APK from ZIP: ${zipFile.absolutePath}")
 
-        // Builds are serialized, so any existing compile folder is a leftover from an earlier run.
-        context.cacheDir.listFiles { file -> file.name.startsWith(COMPILE_DIR_PREFIX) }?.forEach { it.deleteRecursively() }
         val outputDir = File(context.cacheDir, "$COMPILE_DIR_PREFIX${System.currentTimeMillis()}")
         try {
             return compileApkIn(outputDir, context, zipFile, cancellation)
