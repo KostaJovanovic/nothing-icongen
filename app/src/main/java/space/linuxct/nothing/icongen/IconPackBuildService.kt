@@ -20,6 +20,7 @@ object IconPackBuildService {
     private const val NOTIFICATION_ID = 42
     private const val RESULT_ID = 43
     private const val THEME_ACCESS_ID = 44
+    private const val RENDER_ERRORS_ID = 45
     private const val NOTIFICATION_TIMEOUT_MS = 60_000L
     private const val BUILD_DIR_PREFIX = "autobuild_"
 
@@ -28,7 +29,10 @@ object IconPackBuildService {
     fun build(context: Context, cancellation: BuildCoordinator.Cancellation): File {
         Log.d(TAG, "Build started")
         ensureChannels(context)
-        context.getSystemService(NotificationManager::class.java).cancel(RESULT_ID)
+        context.getSystemService(NotificationManager::class.java).apply {
+            cancel(RESULT_ID)
+            cancel(RENDER_ERRORS_ID)
+        }
         cancellation.update {
             BuildCoordinator.State(phase = BuildCoordinator.Phase.SCANNING,
                 message = "Scanning installed apps", percent = 5, startedAt = System.currentTimeMillis())
@@ -42,12 +46,19 @@ object IconPackBuildService {
         val outputDir = File(outputRoot, "$BUILD_DIR_PREFIX${System.currentTimeMillis()}")
         try {
             // The resource ZIP is written beside outputDir, so it survives the cleanup below.
-            val zip = IconGeneratorEngine.generate(
-                context = context.applicationContext,
-                outputDir = outputDir,
-                maxApps = 2000,
-                cancellation = cancellation,
-            )
+            val renderFailures = ArrayList<Pair<String, Exception>>()
+            val zip = try {
+                IconGeneratorEngine.generate(
+                    context = context.applicationContext,
+                    outputDir = outputDir,
+                    maxApps = 2000,
+                    cancellation = cancellation,
+                    renderFailures = renderFailures,
+                )
+            } finally {
+                // Also when every app failed and generation threw: these are what the author needs to triage.
+                postRenderErrors(context, renderFailures)
+            }
             cancellation.update {
                 it.copy(phase = BuildCoordinator.Phase.COMPILING, message = "Compiling APK", percent = 80)
             }
@@ -88,6 +99,7 @@ object IconPackBuildService {
         manager.cancel(NOTIFICATION_ID)
         manager.cancel(RESULT_ID)
         manager.cancel(THEME_ACCESS_ID)
+        manager.cancel(RENDER_ERRORS_ID)
     }
 
     private fun openApp(context: Context): PendingIntent = PendingIntent.getActivity(
@@ -156,6 +168,22 @@ object IconPackBuildService {
         action: PendingIntent? = null,
     ) = postNotice(context, RESULT_ID, title, message, kind, action)
 
+    private fun postRenderErrors(context: Context, failures: List<Pair<String, Exception>>) {
+        if (failures.isEmpty()) return
+        val title = if (failures.size == 1) "1 icon could not be generated"
+            else "${failures.size} icons could not be generated"
+        // No timeout: the user needs time to screenshot it, even after an unattended rebuild.
+        postNotice(context, RENDER_ERRORS_ID, title, renderErrorReport(failures),
+            ResultKind.ERROR, action = null, expires = false)
+    }
+
+    /** Package, exception and its top two stack frames per app, as the author asked for in bug reports. */
+    internal fun renderErrorReport(failures: List<Pair<String, Exception>>): String =
+        "Take a screenshot of this error and submit it to the author.\n\n" +
+            failures.joinToString("\n\n") { (component, e) ->
+                (listOf(component, e.toString()) + e.stackTrace.take(2).map { "  at $it" }).joinToString("\n")
+            }
+
     private fun postNotice(
         context: Context,
         id: Int,
@@ -163,6 +191,7 @@ object IconPackBuildService {
         message: String,
         kind: ResultKind,
         action: PendingIntent?,
+        expires: Boolean = true,
     ) = synchronized(NotificationPreferences) {
         if (!canNotify(context)) return@synchronized
         ensureChannels(context)
@@ -186,7 +215,7 @@ object IconPackBuildService {
             .setDefaults(0)
             .setSound(null)
             .setAutoCancel(true)
-            .setTimeoutAfter(NOTIFICATION_TIMEOUT_MS)
+            .apply { if (expires) setTimeoutAfter(NOTIFICATION_TIMEOUT_MS) }
             .build()
         context.getSystemService(NotificationManager::class.java).notify(id, notification)
     }

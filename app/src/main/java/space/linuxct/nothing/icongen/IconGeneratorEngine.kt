@@ -10,7 +10,8 @@ object IconGeneratorEngine {
     private const val TAG = "IconGeneratorEngine"
 
     fun generate(context: Context, outputDir: File, maxApps: Int = 2000,
-                 cancellation: BuildCoordinator.Cancellation = BuildCoordinator.cancellation(context)): File {
+                 cancellation: BuildCoordinator.Cancellation = BuildCoordinator.cancellation(context),
+                 renderFailures: MutableList<Pair<String, Exception>> = ArrayList()): File {
         cancellation.checkpoint()
         ThemeColors.invalidate()
         val palette = ThemeColors.resolve(context)
@@ -36,6 +37,7 @@ object IconGeneratorEngine {
                         if (e is CancellationException) throw e
                         // One unrenderable icon must not block the pack; the app stays unmapped (iconback plate).
                         Log.w(TAG, "Skipping ${app.componentName}: Nothing renderer failed", e)
+                        renderFailures.add(app.componentName to e)
                     }
                     cancellation.checkpoint()
                 }
